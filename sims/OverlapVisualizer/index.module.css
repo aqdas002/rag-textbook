@@ -1,0 +1,7 @@
+/* sims/OverlapVisualizer/index.module.css */
+.sim { background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+.sim label { display: flex; align-items: center; gap: 1rem; margin: 0.5rem 0; }
+.sim label input { flex: 1; }
+.legend { font-size: 0.85em; color: #4b5563; display: flex; align-items: center; gap: 0.4rem; }
+.overlapSwatch { display: inline-block; width: 14px; height: 14px; background: #ef4444; opacity: 0.5; border-radius: 2px; }
+.svg { width: 100%; height: auto; display: block; }
