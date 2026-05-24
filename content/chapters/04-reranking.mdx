@@ -1,0 +1,200 @@
+---
+id: reranking
+title: Reranking
+estimatedMinutes: 25
+concepts: [two-stage-retrieval, cross-encoder, bi-encoder-vs-cross-encoder, rerank-latency-tradeoff]
+prerequisites: [top-k-retrieval, embedding]
+---
+
+import { RerankerVisualizer } from '@sims/RerankerVisualizer'
+import { TwoStageRecallCurve } from '@sims/TwoStageRecallCurve'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## Why two stages?
+
+The previous chapter ended with a confession: dense retrieval is a starting point, not a ceiling. You embed a query, compute cosine similarity against every stored chunk, and take the top-K. It's fast enough to run in milliseconds against millions of vectors. It's also imprecise in a specific, predictable way — it compares two summaries (the query vector and the chunk vector) without ever looking at how the actual tokens interact.
+
+That imprecision is fine for a first pass. The insight behind two-stage retrieval is that you don't need to be precise at scale; you need to be fast at scale and precise on a small shortlist. Pull 20–30 candidates quickly with the bi-encoder. Then spend real compute on those 20–30 with a model that reads query and document together. The second stage is the reranker.
+
+This is the production pattern. Not bi-encoder alone, not cross-encoder against the whole corpus — both, in sequence. The rest of this chapter explains why the combination works, what it costs, and when to skip it.
+
+## How rerankers actually work
+
+A bi-encoder embeds the query and each document chunk *independently*. The query becomes a vector. Each chunk becomes a vector. Similarity is the dot product or cosine between those two vectors — computed once per stored chunk at index time, then looked up. That's what makes it fast: the chunk vectors are precomputed, so at query time you only embed the query and run K nearest-neighbor lookups.
+
+The cost of that speed is information loss. The query vector is a single point that summarizes the entire query. The chunk vector is a single point that summarizes the entire chunk. By the time you compare them, any fine-grained token-level interaction between query words and chunk words has been compressed away. If the query says "revoke access" and the most relevant chunk says "remove permissions," the bi-encoder may or may not catch that — it depends on whether those concepts ended up close in vector space during training.
+
+A cross-encoder works differently. It takes the query and the document together as a *single input*: `[CLS] query tokens [SEP] document tokens [SEP]`. The attention layers in the transformer see every query token in relation to every document token simultaneously. This is full-attention comparison — the model can catch "revoke" and "remove permissions" as synonyms, detect that the query intent is about access control, and score the document based on how well its actual content answers the actual question. The output is a single relevance score from the `[CLS]` token's final representation.
+
+The cost: you can't precompute anything. You need one forward pass per `(query, document)` pair. For a corpus of 1M chunks, that's 1M forward passes — nonstarter. For a shortlist of 20, it's 20 forward passes — a few hundred milliseconds, totally acceptable.
+
+Before you run the sim, take a prediction.
+
+<PredictGate
+  concept="bi-encoder-vs-cross-encoder"
+  question="The query is: 'How do I revoke a user's access?' Without running the sim, guess: which document does the bi-encoder rank #1 — the one that literally contains the word 'revoke' or the one that says 'To remove permissions, navigate to Settings → Users'? Then guess: after reranking, which one should be at the top?"
+  hint="The bi-encoder compares two compressed vectors. The word 'revoke' appears in the query. Which document shares more keywords with the query?"
+>
+  <RerankerVisualizer initialK={5} />
+</PredictGate>
+
+Look at Stage 1. The bi-encoder ranks the document "Revoking access requires admin privileges..." near the top because it shares the keyword "revoke" with the query. The document that actually answers the question — "To remove permissions, navigate to Settings → Users and click Revoke" — may rank lower despite being the correct answer, because "remove permissions" didn't keyword-match as strongly.
+
+Stage 2 corrects this. The cross-encoder reads both strings together and recognizes that "remove permissions" is the semantic equivalent of "revoke access." The right document rises. This is the entire value proposition of reranking in one example: **keyword similarity is a proxy for relevance; cross-encoder scoring is closer to actual relevance.**
+
+Adjust the K slider. At K=3, you're only sending three candidates to the reranker. If the correct document happened to slip out of the bi-encoder's top-3, no reranker in the world can rescue it. At K=8–10, the correct document is almost certainly in the input, and the cross-encoder's job is to surface it. The initial K you pass to the reranker is itself a tunable parameter — more on that in the In Practice section.
+
+## The cost of precision
+
+Better ranking isn't free. The cross-encoder adds latency — typically 100–150ms for a top-20 rerank. Whether that's worth it depends on two things: how much the recall improves and whether your latency budget can absorb the cost.
+
+On the quality side, the improvement is not subtle. Dense-only retrieval at K=5 typically reaches around 75% recall on standard benchmarks like BEIR. Add a cross-encoder reranker and that number climbs to around 89%. That's 14 percentage points — not a marginal gain. For every 100 queries where pure dense retrieval would miss the correct answer, a reranker rescues roughly 14 of them.
+
+What do you expect the gap to look like? Think about it before unlocking the sim.
+
+<PredictGate
+  concept="rerank-latency-tradeoff"
+  question="If you had to guess: at K=5, how much does adding a cross-encoder reranker improve recall compared to dense retrieval alone? Most engineers guess 'a few percent.' The real answer is larger. Estimate the gap, then check it in the sim. Also: at what latency budget does reranking stop being feasible?"
+  hint="Dense retrieval alone at K=5 is around 75% recall on typical BEIR benchmarks. Where do you think reranking takes it?"
+>
+  <TwoStageRecallCurve initialBudget={250} />
+</PredictGate>
+
+The sim shows two curves: dense-only (gray) and dense + rerank (indigo). The gap at K=5 is roughly 14 percentage points — from about 75% to 89% recall. That's the number to cite when someone asks "what's the actual lift from a reranker?"
+
+A few things to notice. First, the dense-only curve has a long flat tail after K=10. Fetching more results doesn't help much — you've already retrieved the documents that score highest by cosine similarity. A reranker re-orders what you already have; it doesn't change the retrieval ceiling. This is why the sweet spot for the reranker input size is K=20–30: enough candidates that a buried relevant doc makes it into the pool, not so many that the reranker is working over noise.
+
+Second, the latency table. Dense retrieval alone: 80ms. Cross-encoder rerank, top-20: 120ms. Total: 200ms. If your latency budget is 150ms, reranking is off the table regardless of the quality lift. Drag the slider below 200ms and the sim confirms it won't fit. This is an engineering constraint, not an academic one — you'll hit this in production.
+
+Third, the K=5 sweet spot marker. The gap between the two curves is widest in the K=3–5 range and narrows as K grows. This is where the reranker does its best work relative to its cost. Asking for K=50 from the reranker when you'll only pass K=5 to the LLM is usually wasteful — the extra precision above K=5 doesn't help if you're truncating the output anyway.
+
+## When NOT to use a reranker
+
+Reranking is the right tool often, but not always. Before adding it to your pipeline, check whether one of these conditions applies.
+
+**Your latency budget is under 200ms.** Dense retrieval on a well-tuned HNSW index runs at 20–80ms. A cross-encoder reranker adds 100–150ms. If your SLA is 200ms end-to-end for the retrieval stage, you're already over budget before the LLM call. A faster (smaller) reranker like a distilled bge model can get this down to 60–80ms, but you take a quality hit. Know your budget before architecting.
+
+**Your corpus is small and your queries are simple.** Reranking shows its biggest gains when there's a large gap between keyword similarity and semantic relevance — multi-hop reasoning, paraphrase-heavy domains, or queries where the right answer uses different vocabulary than the question. If your corpus is 5,000 well-written technical documents and your users ask exact terminology questions, bi-encoder + tight K=3 may already be excellent. Measure before adding complexity.
+
+**You're already doing hybrid + dedup at index time.** If you combine BM25 and dense retrieval via RRF and have near-duplicates removed, your top-5 from hybrid retrieval is already better than pure dense retrieval's top-5. The marginal gain from adding a reranker is real but smaller. The ROI calculation changes.
+
+**Your queries are factoid-style where a tight K=3 suffices.** "What is the return window?" has one correct answer. If your bi-encoder reliably puts that answer in the top-3, a reranker is adding 150ms of latency to fix a problem that doesn't exist for your query distribution. Measure recall@3 on your actual query logs before assuming you need it.
+
+The pedagogical point: reranking is a tool, not a default. The chapters in this series build a vocabulary of techniques; the production skill is knowing which ones to reach for and which ones to skip given your constraints.
+
+## In practice
+
+The previous sections gave you the mechanism. This one tells you what working engineers actually use, what the numbers look like in production, and where the technique quietly fails.
+
+### The reranker landscape (2024–2026)
+
+The market is small and concentrated. The options you'll actually evaluate:
+
+- **Cohere `rerank-3` / `rerank-3.5`** — API-only. Approximately $2 per 1,000 reranks. Multilingual. Consistently at or near the top of public benchmarks (MS MARCO, BEIR). The most widely deployed production reranker as of 2025. `rerank-3.5` adds improved multilingual coverage and a higher context limit.
+- **Voyage `rerank-2`** — API-only. Competitive with Cohere on English benchmarks, slightly cheaper on per-call pricing. Strong on domain-specific corpora. Worth benchmarking if you're already on Voyage embeddings.
+- **BAAI `bge-reranker-v2-m3`** — open-source, self-hostable. The strongest open-weight option as of mid-2025. Multilingual. Runs on a single T4 GPU. The go-to for teams that need cost predictability or data privacy requirements that rule out third-party APIs.
+- **Jina `jina-reranker-v2`** — open-source, multilingual, smaller and faster than bge-reranker-v2-m3 at a modest quality tradeoff. Useful when you need to self-host and latency is tight.
+- **OpenAI does not ship a reranker.** Some teams prompt GPT-4o to score (query, document) pairs and return a relevance score. This works, it's expensive, it's slow (~500ms per pair), and it's hard to batch. It's done in very-low-volume, high-stakes RAG (legal review, medical QA) where the quality ceiling matters more than cost. Not a production default.
+
+### Cost math
+
+A concrete example: your system runs 1,000 queries per second. Each query reranks the top-20 candidates.
+
+- **Cohere at $2/1K reranks**: 1,000 QPS × 20 reranks/query = 20,000 reranks/second. At $2/1K, that's $0.04/second = $144/hour = approximately **$104,000/month** for that one stage. Cohere's pricing caps and enterprise contracts change this math significantly, but the raw number is what it is.
+- **More typical: 10 QPS** (a real mid-size internal tool). 10 × 20 × $2/1,000 = $0.004/second ≈ **$350/month** for reranking. Affordable.
+- **Self-hosted bge-reranker-v2-m3 on a T4 GPU**: ~$200/month for the GPU (GCP us-central1). Batched throughput at ~50 rerank-requests/second. Handles up to 4.3M reranks/day. Above roughly **200,000 reranks/day**, self-hosted is cheaper than Cohere API. Below that, the API is cheaper once you factor in engineering time.
+
+The crossover calculation: API cost breakeven = GPU cost / cost-per-rerank. At $200/month GPU and $2/1K ($0.002 per rerank): $200 / $0.002 = 100,000 reranks/month = ~3,300/day. That seems low, but remember to add the engineering cost of running and monitoring the GPU — realistically, the break-even for most teams is closer to 200K–500K reranks/day when fully loaded.
+
+### Latency
+
+Cohere `rerank-3` p50 latency for top-20 documents: approximately 150ms from US data centers. Self-hosted `bge-reranker-v2-m3` on a T4, batched: approximately 120ms for top-20. Both numbers add directly to your retrieval critical path.
+
+Practical mitigations: run BM25 and dense retrieval in parallel (they're independent), then feed the merged candidates to the reranker. If you're combining hybrid retrieval with reranking, you can hide the retrieval latency inside the reranking call's compute time rather than waiting for retrieval to finish before starting the rerank. This doesn't eliminate the 120–150ms but prevents double-counting latency you were already paying.
+
+### The K to send to the reranker
+
+More candidates in = more chances to rescue a buried gem, but the cross-encoder runs one forward pass per candidate. The cost is linear in K.
+
+- **K=10** is sufficient for narrow corpora where the bi-encoder is already pretty good.
+- **K=20–30** is the production sweet spot for most general-purpose RAG. Enough to catch out-of-vocabulary synonyms and paraphrases; not so many that you're paying for noise.
+- **K=50** is reasonable for very high-stakes queries (medical, legal) where missing the correct document is worse than the extra latency.
+
+The output from the reranker is almost always top-5 going into the LLM context. The pattern is: bi-encoder top-30 → reranker → top-5 to LLM.
+
+### What the cross-encoder actually does (architectural detail)
+
+Input format: `[CLS] query tokens [SEP] document tokens [SEP]`. The entire sequence goes through a transformer encoder (typically a BERT-family architecture). The final hidden state of the `[CLS]` token is passed through a linear layer to produce a single scalar — the relevance score.
+
+Training data: MS MARCO (question + passage pairs with binary or graded relevance labels) and BEIR evaluation suite for zero-shot generalization. Commercial rerankers are additionally fine-tuned on proprietary (query, document, relevance) triplets. The fine-tuning teaches the model to distinguish "this document directly answers the question" from "this document is about the topic of the question."
+
+This training-time exposure to query–document interaction is precisely why the cross-encoder catches synonym matches and intent that bi-encoders miss. The bi-encoder never saw query and document together during training; the cross-encoder was specifically trained on that comparison.
+
+### The single highest-leverage rerank trick
+
+**Always run the reranker before MMR.**
+
+If you're using both a reranker and MMR (Maximal Marginal Relevance) in your pipeline, the order matters. Run rerank first, then apply MMR to the reranked output.
+
+The reasoning: a cross-encoder trained on large general-purpose data implicitly accounts for some diversity — documents that say identical things get scored similarly, and if the top-1 doc already covers the answer, a doc that repeats it will score lower. MMR applied after reranking refines an already-good ranking by introducing controlled diversity. MMR applied before reranking is operating on noisy bi-encoder scores and may diversity-select documents that the reranker would have demoted anyway.
+
+Stronger claim: if you have a reranker in the pipeline, MMR is often unnecessary entirely. The reranker's learned scoring reduces redundancy more gracefully than MMR's greedy penalty. Most production pipelines that add reranking quietly remove MMR at the same time and see no regressions.
+
+### The failure mode you will see in production
+
+> "We added the Cohere reranker. Latency went up 150ms. Eval quality improved 1%. Not worth it."
+
+This is a real report from real teams. The root cause is almost always **domain mismatch**.
+
+Cohere `rerank-3` and `bge-reranker-v2-m3` are both trained primarily on general web text and Q&A datasets (MS MARCO, Natural Questions, etc.). On those domains, they're excellent. On specialized domains — medical drug interaction guidelines, patent law, semiconductor process specs, clinical trial protocols — the reranker's learned notion of "relevance" may diverge from your domain's notion of relevance.
+
+The symptom: the reranker confidently promotes documents that *look* relevant by general-purpose patterns but aren't the specific answer in your domain. The bi-encoder, trained on in-domain text (if you fine-tuned it), often does better on domain terminology than the off-the-shelf cross-encoder.
+
+The mitigation options:
+1. **Fine-tune a cross-encoder on your domain.** 200–500 labeled `(query, document, relevant/not-relevant)` triplets are often enough for meaningful improvement. Use MS MARCO as a warm-start checkpoint and continue training on your domain data. This is a half-day of data labeling and a few GPU-hours of training.
+2. **Accept the smaller lift** and keep the reranker anyway. A 1–3% improvement at 150ms latency cost may still be the right call for high-value queries.
+3. **Use your fine-tuned bi-encoder alone** with a tighter K=3, skip the reranker, and invest the engineering effort in better index-time processing (contextual chunk prefixes, hybrid retrieval).
+
+Fine-tuning a cross-encoder on 200–500 domain triplets is one of the highest-return MLOps tasks in RAG. Cite it in interviews. Most people know about fine-tuning embeddings; fewer know the cross-encoder fine-tuning path.
+
+### Where reranking fits in the bigger system
+
+```
+query → [query rewrite (optional)] → [BM25 + dense retrieval, parallel]
+      → [merge via RRF, top-30]
+      → [cross-encoder rerank → top-5]
+      → [LLM context]
+```
+
+The dominant latency costs are dense retrieval (20–80ms) and the cross-encoder (100–150ms). Running BM25 and dense in parallel hides most of BM25's cost inside the dense call. Cache aggressively for repeat queries — many production systems see 15–30% query repetition, and a reranker cache keyed on `(query, candidate_set_hash)` eliminates the most expensive step for those queries.
+
+The LLM call (not shown) dwarfs everything else for large models — 500ms to several seconds. Put it in perspective: a 150ms reranker cost matters at the margin, but the retrieval stage is rarely the system's dominant latency source when the LLM is GPT-4o or Claude Sonnet. Where it matters most is latency-sensitive applications with fast local LLMs or streaming outputs where first-token latency is the metric.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and design reviews. They're scenario-based: you're given a specific situation, constraints, and have to reason from principles. There's no single right answer to most — what's graded is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes.
+
+<RecallPrompt
+  concept="rerank-latency-tradeoff"
+  question="**Architecture call.** You're proposing reranking to your CTO. She asks: 'What's the actual lift, and what's the latency hit?' Give her a number-based answer. Include: the recall improvement at K=5 on standard benchmarks, the typical p50 latency for Cohere rerank-3 vs. self-hosted bge-reranker-v2-m3, your system's current QPS and what that implies for monthly API cost, and the specific condition under which you'd recommend self-hosted over API. Make a concrete recommendation."
+/>
+
+<RecallPrompt
+  concept="cross-encoder"
+  question="**Production debug.** You added Cohere rerank-3 to your RAG pipeline. Offline eval shows the relevant document is now ranked #1 (up from #3). Despite this, user satisfaction scores dropped 5% after the rollout. The retrieval logs look correct. Find the bug. What are the two most likely explanations, and what would you check first in the production logs to distinguish between them? (Hint: think about what happens downstream of retrieval, not inside it.)"
+/>
+
+<RecallPrompt
+  concept="rerank-latency-tradeoff"
+  question="**Cost vs quality.** You're currently at 50,000 reranks per day on the Cohere API and growing 20% month-over-month. Your CFO asks when you should switch to self-hosted bge-reranker-v2-m3 on a T4 GPU. Walk through the full calculation: current monthly API cost, projected trajectory, self-hosted monthly cost (GPU + engineering overhead), break-even point in reranks/day, and the earliest month at which self-hosted becomes cheaper. What other factors besides cost would you weigh?"
+/>
+
+<RecallPrompt
+  concept="bi-encoder-vs-cross-encoder"
+  question="**Senior eng pushback.** A teammate proposes skipping the bi-encoder stage entirely and running the cross-encoder against the full corpus of 1 million documents. 'It's more accurate — why bother with the approximate first stage?' Explain specifically why this is wrong. Quantify: if a cross-encoder forward pass takes 5ms on a T4 GPU with a batch size of 8, what is the wall-clock time to score 1 million documents? How many GPUs would you need to hit sub-second latency? What does that cost per query at $200/month per GPU?"
+/>
+
+<RecallPrompt
+  concept="cross-encoder"
+  question="**Failure-mode trace.** Your team built RAG over medical drug interaction guidelines using off-the-shelf Cohere rerank-3. After deployment: latency increased 150ms, but eval quality improved only 1% (up from 82% to 83% recall@5). Your CTO asks whether the reranker is pulling its weight. Diagnose the likely root cause. Propose a concrete fix that should recover 5–10 additional percentage points of recall. Include what data you need, how long it takes to collect and label, and the expected timeline to a better-performing system."
+/>
