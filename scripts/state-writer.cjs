@@ -5,6 +5,18 @@ const path = require('node:path');
 const STATE_FILE = path.join(__dirname, '..', '.sim-state.json');
 const PORT = 5174;
 
+// Per-key merge for pendingAnswers / pendingGrades. null deletes a key.
+function mergeMap(existing, incoming) {
+  const out = existing && typeof existing === 'object' ? { ...existing } : {};
+  if (incoming && typeof incoming === 'object') {
+    for (const [k, v] of Object.entries(incoming)) {
+      if (v === null) delete out[k];
+      else out[k] = v;
+    }
+  }
+  return out;
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -64,10 +76,16 @@ const server = http.createServer((req, res) => {
     const next = {
       ...existing,
       ...parsed,
+      pendingAnswers: mergeMap(existing.pendingAnswers, parsed.pendingAnswers),
+      pendingGrades: mergeMap(existing.pendingGrades, parsed.pendingGrades),
       version: 1,
       lastUpdated: new Date().toISOString(),
       recentInteractions: recent,
     };
+
+    // Drop legacy singletons if they exist on disk from earlier versions.
+    delete next.pendingAnswer;
+    delete next.pendingGrade;
 
     const tmp = STATE_FILE + '.tmp';
     try {

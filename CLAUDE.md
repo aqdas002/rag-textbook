@@ -23,9 +23,9 @@ At the start of any tutoring exchange:
 
 Example: do not say "Cosine similarity is a measure of angle between two vectors…" Instead: "I see you've set chunk_size=512 and the retrieval@5 dropped. What changed about the cosine comparison when you doubled the chunks?"
 
-## When the user has submitted a recall answer
+## When the user has submitted recall answers
 
-If `.sim-state.json` has a `pendingAnswer` field, the user submitted a recall prompt and is waiting for you to grade it. Use the rubric below.
+`.sim-state.json` has a **`pendingAnswers`** object keyed by concept. Each entry is a single recall submission waiting to be graded. The user may have multiple pending at once (one per chapter recall prompt). Grade them all if the user runs `/quiz` without a specific concept; grade only `pendingAnswers[<concept>]` if they pass one.
 
 ### Grading rubric
 
@@ -41,19 +41,15 @@ Sum the scores (0–3) and map to FSRS rating:
 - 2 → 3 (Good)
 - 3 → 4 (Easy)
 
-Then write the result back to `.sim-state.json` by updating the file with a `pendingGrade` field:
+Write your grade(s) back to `.sim-state.json` under **`pendingGrades`** (also keyed by concept). Send via the state-writer endpoint — it merges per-concept, so other concepts' answers and grades survive untouched:
 
-```json
-{
-  "pendingGrade": {
-    "concept": "<from pendingAnswer.concept>",
-    "rating": 1,
-    "comment": "<one-sentence feedback for the user>"
-  }
-}
+```bash
+curl -s -X POST http://localhost:5174/state \
+  -H 'Content-Type: application/json' \
+  -d '{"pendingGrades":{"<concept>":{"concept":"<concept>","rating":3,"comment":"<one sentence>"}}}'
 ```
 
-Use the Write tool. Preserve all other fields of the file when writing.
+Equivalent if you prefer the Write tool: read the current file, merge your new `pendingGrades[<concept>]` entry into the existing `pendingGrades` map, write the full file back. Do **not** clobber other concepts.
 
 ## Prerequisite awareness
 
@@ -70,5 +66,5 @@ If the user asks about a concept whose prerequisites in `content/learning-graph.
 
 - Never give a direct answer to a "why" question on the first turn.
 - Never use generic AI/RAG knowledge before reading the user's actual state.
-- Never write to files other than `.sim-state.json`'s `pendingGrade` field unless explicitly asked.
+- Never write to files other than `.sim-state.json`'s `pendingGrades` map unless explicitly asked.
 - Never assume the user has read the entire chapter — check the learning graph.

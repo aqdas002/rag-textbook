@@ -58,10 +58,43 @@ test('writes posted body to .sim-state.json with version + lastUpdated', async (
 
 test('preserves existing fields not present in incoming POST', async () => {
   await post({ currentChapter: 'chunking', simState: { chunkSize: 100 } });
-  await post({ pendingAnswer: { concept: 'c1', answer: 'a' } });
+  await post({ pendingAnswers: { c1: { concept: 'c1', answer: 'a' } } });
   const w = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
   expect(w.simState.chunkSize).toBe(100); // preserved
-  expect(w.pendingAnswer.concept).toBe('c1');
+  expect(w.pendingAnswers.c1.concept).toBe('c1');
+});
+
+test('pendingAnswers / pendingGrades merge per-concept across posts', async () => {
+  await post({ pendingAnswers: { c1: { concept: 'c1', answer: 'a1' } } });
+  await post({ pendingAnswers: { c2: { concept: 'c2', answer: 'a2' } } });
+  await post({ pendingGrades: { c1: { concept: 'c1', rating: 3, comment: 'ok' } } });
+  const w = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  // Both pending answers survive the second post
+  expect(w.pendingAnswers.c1.answer).toBe('a1');
+  expect(w.pendingAnswers.c2.answer).toBe('a2');
+  // Grade was added without disturbing answers
+  expect(w.pendingGrades.c1.rating).toBe(3);
+});
+
+test('null clears a specific concept from pendingAnswers / pendingGrades', async () => {
+  await post({ pendingAnswers: { c1: { concept: 'c1', answer: 'a' }, c2: { concept: 'c2', answer: 'b' } } });
+  await post({ pendingAnswers: { c1: null } });
+  const w = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  expect(w.pendingAnswers.c1).toBeUndefined();
+  expect(w.pendingAnswers.c2.answer).toBe('b');
+});
+
+test('drops legacy singleton pendingAnswer / pendingGrade keys on next write', async () => {
+  // Simulate a file written by the old code with singleton keys
+  fs.writeFileSync(STATE_FILE, JSON.stringify({
+    version: 1,
+    pendingAnswer: { concept: 'c1', answer: 'legacy' },
+    pendingGrade: { concept: 'c1', rating: 2, comment: '' },
+  }));
+  await post({ simState: { chunkSize: 1 } });
+  const w = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  expect(w.pendingAnswer).toBeUndefined();
+  expect(w.pendingGrade).toBeUndefined();
 });
 
 test('appends to recentInteractions ring buffer when simState changes', async () => {

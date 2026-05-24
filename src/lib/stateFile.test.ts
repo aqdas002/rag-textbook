@@ -13,16 +13,16 @@ describe('stateFile poller', () => {
     vi.useRealTimers();
   });
 
-  test('calls subscriber when pendingGrade appears', async () => {
+  test('calls subscriber when a grade appears in pendingGrades map', async () => {
     let calls: any[] = [];
     (fetch as any).mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ pendingAnswer: { concept: 'c1', answer: 'a' } }),
+      json: async () => ({ pendingAnswers: { c1: { concept: 'c1', answer: 'a' } } }),
     }).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        pendingAnswer: { concept: 'c1', answer: 'a' },
-        pendingGrade: { concept: 'c1', rating: 3, comment: 'good' },
+        pendingAnswers: { c1: { concept: 'c1', answer: 'a' } },
+        pendingGrades: { c1: { concept: 'c1', rating: 3, comment: 'good' } },
       }),
     });
 
@@ -34,15 +34,32 @@ describe('stateFile poller', () => {
     expect(calls[0]).toEqual({ concept: 'c1', rating: 3, comment: 'good' });
   });
 
-  test('does not double-fire for the same pendingGrade', async () => {
+  test('does not double-fire for the same grade on the same concept', async () => {
     let calls = 0;
     (fetch as any).mockResolvedValue({
       ok: true,
-      json: async () => ({ pendingGrade: { concept: 'c1', rating: 3, comment: '' } }),
+      json: async () => ({ pendingGrades: { c1: { concept: 'c1', rating: 3, comment: '' } } }),
     });
     subscribeToPendingGrade(() => calls++);
     await vi.advanceTimersByTimeAsync(300);
     expect(calls).toBe(1);
+  });
+
+  test('fires for each distinct concept in pendingGrades', async () => {
+    let calls: any[] = [];
+    (fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        pendingGrades: {
+          c1: { concept: 'c1', rating: 3, comment: '' },
+          c2: { concept: 'c2', rating: 4, comment: '' },
+        },
+      }),
+    });
+    subscribeToPendingGrade(g => calls.push(g));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toHaveLength(2);
+    expect(calls.map(c => c.concept).sort()).toEqual(['c1', 'c2']);
   });
 
   test('silently swallows fetch errors', async () => {

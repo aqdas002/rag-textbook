@@ -1,4 +1,3 @@
-// src/lib/stateFile.ts
 export interface PendingGrade {
   concept: string;
   rating: 1 | 2 | 3 | 4;
@@ -8,8 +7,8 @@ export interface PendingGrade {
 type Listener = (grade: PendingGrade) => void;
 
 const listeners = new Set<Listener>();
+const lastSeenByConcept = new Map<string, string>();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let lastSeenKey: string | null = null;
 let intervalMs = 2000;
 
 async function poll(): Promise<void> {
@@ -17,12 +16,15 @@ async function poll(): Promise<void> {
     const res = await fetch('/.sim-state.json', { cache: 'no-store' });
     if (!res.ok) return;
     const state = await res.json();
-    const grade = state.pendingGrade as PendingGrade | undefined;
-    if (!grade) return;
-    const key = `${grade.concept}|${grade.rating}|${grade.comment}`;
-    if (key === lastSeenKey) return;
-    lastSeenKey = key;
-    listeners.forEach(l => l(grade));
+    const grades = state.pendingGrades as Record<string, PendingGrade> | undefined;
+    if (!grades || typeof grades !== 'object') return;
+    for (const grade of Object.values(grades)) {
+      if (!grade || typeof grade !== 'object') continue;
+      const key = `${grade.concept}|${grade.rating}|${grade.comment}`;
+      if (lastSeenByConcept.get(grade.concept) === key) continue;
+      lastSeenByConcept.set(grade.concept, key);
+      listeners.forEach(l => l(grade));
+    }
   } catch {
     // offline / file missing — fine
   }
@@ -50,7 +52,7 @@ export function _stopForTests(): void {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
   listeners.clear();
-  lastSeenKey = null;
+  lastSeenByConcept.clear();
 }
 
 /** Test-only. */

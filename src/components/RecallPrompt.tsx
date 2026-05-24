@@ -30,7 +30,9 @@ export function RecallPrompt({ concept, question }: Props) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        pendingAnswer: { concept, question, answer, ts: new Date().toISOString() },
+        pendingAnswers: {
+          [concept]: { concept, question, answer, ts: new Date().toISOString() },
+        },
       }),
     }).catch(() => {});
     setPhase('awaitingGrade');
@@ -43,7 +45,10 @@ export function RecallPrompt({ concept, question }: Props) {
     fetch('http://localhost:5174/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pendingAnswer: null, pendingGrade: null }),
+      body: JSON.stringify({
+        pendingAnswers: { [concept]: null },
+        pendingGrades: { [concept]: null },
+      }),
     }).catch(() => {});
     setPhase('committed');
   }

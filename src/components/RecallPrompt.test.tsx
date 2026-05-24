@@ -20,7 +20,7 @@ describe('RecallPrompt', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
-  test('submitting answer posts pendingAnswer to state-writer', async () => {
+  test('submitting answer posts pendingAnswers[concept] to state-writer', async () => {
     render(<RecallPrompt concept="c1" question="Explain X." />);
     await userEvent.type(screen.getByRole('textbox'), 'My answer');
     await userEvent.click(screen.getByRole('button', { name: /submit/i }));
@@ -31,9 +31,25 @@ describe('RecallPrompt', () => {
       );
     });
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
-    expect(body.pendingAnswer).toEqual(
+    expect(body.pendingAnswers).toBeDefined();
+    expect(body.pendingAnswers.c1).toEqual(
       expect.objectContaining({ concept: 'c1', answer: 'My answer', question: 'Explain X.' }),
     );
+  });
+
+  test('commit clears only its own concept from pendingAnswers / pendingGrades', async () => {
+    let subCb: any;
+    (stateFile.subscribeToPendingGrade as any).mockImplementation((cb: any) => { subCb = cb; return () => {}; });
+    render(<RecallPrompt concept="c1" question="Q" />);
+    await userEvent.type(screen.getByRole('textbox'), 'a');
+    await userEvent.click(screen.getByRole('button', { name: /submit/i }));
+    subCb({ concept: 'c1', rating: 3, comment: '' });
+    (fetch as any).mockClear();
+    await userEvent.click(await screen.findByRole('button', { name: /commit to sr/i }));
+    const lastCall = (fetch as any).mock.calls.slice(-1)[0];
+    const body = JSON.parse(lastCall[1].body);
+    expect(body.pendingAnswers).toEqual({ c1: null });
+    expect(body.pendingGrades).toEqual({ c1: null });
   });
 
   test('after submit, instructs user to run /quiz in Claude Code', async () => {
