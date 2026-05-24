@@ -6,6 +6,106 @@ concepts: [embedding, vector-space, cosine-similarity, semantic-vs-lexical]
 prerequisites: [chunk-size]
 ---
 
-## Embeddings
+import { EmbeddingSpace } from '@sims/EmbeddingSpace'
+import { SimilarityScorer } from '@sims/SimilarityScorer'
+import { PredictGate, RecallPrompt } from '@/components'
 
-*(Content coming — placeholder while routing is wired up.)*
+## What is an embedding?
+
+An embedding is a fixed-length list of numbers — a vector — that encodes the *meaning* of a piece of text. Feed a model the word "king" and it returns something like `[0.12, 0.88, ...]`. Feed it "queen" and you get a different vector, but one that is numerically close to the first. Feed it "pizza" and you get a vector far away from both.
+
+This is the core mechanism behind semantic retrieval. Instead of asking "does this document contain the word 'monarch'?", a RAG system asks "is this document's vector close to the query's vector?" That shift — from matching symbols to measuring geometric distance — is what lets retrieval survive synonym substitution, paraphrase, and translation.
+
+The model that produces embeddings is called an **encoder**. It's a separate model from the generator (the LLM that produces answers). You run the encoder once at index time for every chunk, store the resulting vectors in a vector database, and then run it again at query time to embed the incoming question. Retrieval is the geometry problem that follows.
+
+One detail worth fixing early: an embedding is not a "summary" and it is not human-readable. It is a coordinate in a high-dimensional space. What makes it useful is not any single dimension — it's the position *relative to other vectors* that carries meaning.
+
+## The space
+
+Before reading on, make a prediction.
+
+<PredictGate
+  concept="vector-space"
+  question="The sim below plots 30 words as dots in 2D. Before you click any dot: how do you expect the words to be arranged? Will 'king' and 'queen' be close together? Will 'king' and 'pizza' be far apart? Will clusters be visible at all?"
+  hint="Think about what the encoder was trained to do: predict tokens in context. Words that appear in similar contexts get pulled toward each other."
+>
+  <EmbeddingSpace />
+</PredictGate>
+
+What you saw: words that share meaning share a neighborhood. "King", "queen", "prince", and "throne" cluster together. "Pizza", "burger", and "pasta" are far from royalty but close to each other. Click "king" and its five nearest neighbors are almost entirely other royalty words — the cluster purity metric shows this directly.
+
+This is not a coincidence of the visualization. Real embedding models — trained on billions of tokens — produce exactly this structure, just in 384 to 1536 dimensions instead of two. The 2D layout here is a projection that preserves local neighborhood relationships; the clusters you see reflect genuine geometry in the higher-dimensional space.
+
+The practical implication: position encodes meaning. Embed a user's question and you get a point in this space. The chunks whose vectors are nearest to that point are, by construction, the ones whose meaning is most similar to the question. Retrieval is a nearest-neighbor search.
+
+## Measuring similarity
+
+"Close" needs a precise definition. The standard one in embedding retrieval is **cosine similarity**: the cosine of the angle between two vectors.
+
+```
+cosine(A, B) = (A · B) / (|A| × |B|)
+```
+
+The dot product in the numerator measures directional alignment. Dividing by the magnitudes normalizes away vector length, so a short vector and a long vector pointing in the same direction score 1.0. Vectors pointing in opposite directions score -1.0. Perpendicular vectors score 0.
+
+This matters because embedding magnitude is not meaningful — two embeddings of the same sentence produced by the same model will have the same direction but potentially different magnitudes depending on implementation details. Cosine similarity is robust to that noise.
+
+Now predict before you interact.
+
+<PredictGate
+  concept="cosine-similarity"
+  question="In the scorer below, Phrase A starts as 'the king and queen wear the crown' and Phrase B as 'royalty rules the throne'. Both are about royalty — you'd expect a high similarity score. Now predict: if you change Phrase B to 'the cat and dog play in the yard', will the score drop a little or a lot? What if you change Phrase B to 'the monarch and empress hold the scepter' — words the model has never seen, but close in meaning?"
+  hint="The scorer uses only the 30 words in the embedding space as its vocabulary. Unrecognized tokens are silently dropped."
+>
+  <SimilarityScorer
+    initialA="the king and queen wear the crown"
+    initialB="royalty rules the throne"
+  />
+</PredictGate>
+
+A few things the scorer makes visible. First, swapping to "cat and dog" tanks the score — because those words land in a completely different region of the space, and the angle between the two vectors widens dramatically. Second, the scorer's vocabulary is the 30 words from the embedding space sim; tokens not in that list are dropped silently. That's why "monarch" and "empress" score zero — the scorer doesn't know them. A real model trained on billions of tokens would handle those words fine and produce a high similarity score, because it has seen "monarch" in the same contexts as "king".
+
+Third, and most important: the scorer is computing cosine similarity on 2D vectors that were hand-placed to illustrate clusters. Real embeddings use the same formula on 384-1536 dimensional vectors produced by a neural encoder. The math is identical; only the dimensionality changes.
+
+## Semantic vs lexical
+
+Lexical similarity counts shared words. Semantic similarity measures shared meaning. These come apart constantly, and the gap is why keyword search fails at retrieval tasks where RAG is supposed to shine.
+
+Consider two pairs:
+
+**High lexical overlap, low semantic similarity:** "The bank approved my loan" and "The river bank flooded last spring." Both sentences contain "bank." A keyword search treats them as related. Their embedding vectors point in very different directions, because encoders learn from context — "bank" next to "loan" and "approved" patterns like a financial institution; "bank" next to "river" and "flooded" patterns like a geographic feature. The model has seen thousands of examples of each usage and has separated them in its internal space.
+
+**Low lexical overlap, high semantic similarity:** "The king reigned for forty years" and "The monarch ruled the realm." No words in common besides function words. A keyword search gives them near-zero overlap. Their embeddings are close — because "king" and "monarch" appear in nearly identical contexts in training data, and so do "reigned" and "ruled." The cosine similarity score will be high.
+
+The SimilarityScorer demonstrated a toy version of this: synonym swaps within a cluster keep the score high; jumping to a different cluster tanks it. Real encoders generalize this to the entire vocabulary and across languages.
+
+This is the reason RAG systems use vector search rather than BM25 or simple keyword matching: a user who asks "how do I revoke someone's access?" should retrieve a chunk that says "to remove permissions, navigate to..." — no shared content words, but high semantic similarity. And a chunk about "bank transactions" should *not* surface just because the word "access" appeared in a description of an ATM.
+
+One nuance worth tracking: semantic similarity is about *sentence-level meaning in context*, not just word proximity. The embedding of a full chunk reflects all of its words jointly — which is why chunk size, from the previous chapter, still matters. A chunk that mixes two unrelated topics produces an embedding that sits ambiguously between them, scoring mediocre for both. Clean, focused chunks produce embeddings that sit cleanly in one region of the space — which is exactly what you want for high-precision retrieval.
+
+## Recall
+
+<RecallPrompt
+  concept="embedding"
+  question="Explain what an embedding is to a colleague who hasn't encountered the concept. Your explanation must include: what format it takes, what the model is trained to encode, and why it's useful for retrieval — and it must not use the word 'summary'."
+/>
+
+<RecallPrompt
+  concept="vector-space"
+  question="The embedding space sim showed clusters forming around royalty, animals, food, and programming. Why do those clusters appear? Trace the cause back to what an encoder model is trained to do — and explain why 'king' ends up closer to 'queen' than to 'pizza'."
+/>
+
+<RecallPrompt
+  concept="cosine-similarity"
+  question="Two embedding vectors can have very different magnitudes but still score 1.0 on cosine similarity. Why does cosine similarity ignore magnitude, and why is that the right behavior for comparing text embeddings? Give a concrete scenario where magnitude differences would mislead a dot-product-only similarity."
+/>
+
+<RecallPrompt
+  concept="semantic-vs-lexical"
+  question="'The bank approved my loan' and 'the river bank flooded' share a content word but have low semantic similarity. 'The king reigned' and 'the monarch ruled' share no content words but have high semantic similarity. Explain the mechanism behind both — specifically, what about the training process causes this to happen."
+/>
+
+<RecallPrompt
+  concept="cosine-similarity"
+  question="You're building a RAG pipeline and your retrieval precision is poor. You suspect either chunking or embeddings is the cause. Describe a diagnostic: what experiment would you run to tell whether the problem is chunk size (from the previous chapter) versus the embedding model not capturing the right semantic relationships? What outputs would point to each cause?"
+/>
