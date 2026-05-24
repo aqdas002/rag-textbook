@@ -1,0 +1,277 @@
+---
+id: hybrid-search
+title: Hybrid search
+estimatedMinutes: 25
+concepts: [bm25, lexical-vs-semantic-retrieval, reciprocal-rank-fusion, hybrid-search]
+prerequisites: [top-k-retrieval, cosine-similarity]
+---
+
+import { BM25vsDenseComparison } from '@sims/BM25vsDenseComparison'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## The other retrieval (BM25)
+
+The previous chapter ended with a pipeline diagram that showed BM25 and dense retrieval running in parallel before the reranker. This chapter fills in that left branch — the one dense-only tutorials quietly skip.
+
+In every dense-first RAG tutorial, BM25 is framed as the old thing that embeddings replaced. That framing is wrong. BM25 is running in production at Elasticsearch, OpenSearch, Weaviate, Pinecone, and Vespa right now. Every serious hybrid RAG system uses it. It was not replaced; it was augmented.
+
+**A brief history.** TF-IDF (term frequency — inverse document frequency) was the dominant keyword scoring method through the 1980s. Stephen Robertson and colleagues formalized its probabilistic foundations in the early 1990s and produced BM25 — Best Match 25, named after the 25th iteration of their Okapi probabilistic ranking framework. It was published as part of the TREC experiments in 1994 and has remained a top retrieval baseline for three decades.
+
+**Why it still works.** BM25 gives high scores to documents that contain rare terms. If your user searches for "E_AUTH_4096" and exactly one document in your corpus mentions that string, BM25 returns it at rank 1 with a high confidence score. No embedding model can match that on exact-match tasks: the model never saw "E_AUTH_4096" during pretraining, so its vector is underspecified — it might end up near "auth error" or near "4096 bits" or somewhere else entirely depending on tokenization and context.
+
+The same logic applies to product SKUs, legal clause identifiers, version numbers, Git commit hashes, and error codes. These are the tokens that users in a customer-support or developer-docs context actually search for. BM25 handles them natively; dense embeddings often do not.
+
+**The formula.** For a query with terms `q1...qn` against document `d`:
+
+```
+BM25(d, q) = Σ IDF(qi) · [tf(qi,d) · (k1+1)] / [tf(qi,d) + k1·(1 - b + b·|d|/avgdl)]
+```
+
+- `IDF(qi)` = log inverse document frequency — rare terms score higher
+- `tf(qi, d)` = term frequency of `qi` in document `d`
+- `|d|` = document length; `avgdl` = average document length in corpus
+- `k1` = saturation constant (typical: 1.5); controls how fast TF saturates
+- `b` = length normalization (typical: 0.75)
+
+That's the whole thing. The parameters matter and are discussed in In Practice, but the conceptual payload is simpler: BM25 rewards documents that contain the query's rare terms and penalizes very long documents that contain every term incidentally. Don't get lost in the formula — understand the two intuitions.
+
+## Different failure modes
+
+Dense retrieval and BM25 fail in opposite directions. That asymmetry is the entire reason you'd want both.
+
+**BM25 fails on paraphrase.** The query "how do I get my money back?" does not share a single meaningful token with the document "Funds will be returned to your original payment method within a week of cancellation." BM25 score: 0. The relevant document ranks last. Every keyword-search veteran has a folder of examples like this — the system worked great on exact terminology and completely missed the paraphrased version.
+
+**Dense fails on rare terms.** The query "E_AUTH_4096" produces an embedding vector that the model has to construct from subword tokens it has never seen together in a meaningful context. The vector lands somewhere in a neighborhood that may or may not be close to the one document in your corpus that actually explains the error. For common error codes this can work. For rare or domain-specific identifiers — product SKUs, internal error codes, short legal references — the embedding is essentially noise.
+
+**The failure modes are uncorrelated.** The document that BM25 misses (the paraphrase document) is usually found by dense. The document that dense misses (the rare-identifier document) is usually found by BM25. This is the key structural fact. If BM25 and dense failed on the same queries, combining them would provide no benefit. Because they fail on *different* queries, combining them recovers errors from both.
+
+Before you run the sim, take a prediction.
+
+<PredictGate
+  concept="lexical-vs-semantic-retrieval"
+  question="The sim shows 5 queries: two with rare identifiers (E_AUTH_4096, SKU XR-7700-B), two with paraphrased vocabulary (money/funds, login key/credential), and one control. Before running it: which queries do you expect BM25 to win? Which do you expect dense to win? And where does hybrid land — does it win all 5, or is there a query where it falls short too?"
+  hint="BM25 rewards rare tokens. Dense bridges vocabulary gaps. Think about what each method can and can't match."
+>
+  <BM25vsDenseComparison />
+</PredictGate>
+
+Run all five queries. The summary panel at the bottom shows the across-query totals.
+
+**What you observe:** BM25 gets 3/5. Dense gets 5/5. Hybrid gets 4/5.
+
+**Why dense looks so strong here.** The sim's dense retrieval is a bag-of-words cosine with stopword removal plus a handcrafted synonym expansion table ("money" → "funds", "login" → "credential", etc.). That synonym map is not a real embedding model — it's a precise simulation of the paraphrase-bridging behavior we wanted to demonstrate. Real dense models work by learning a continuous vector space from billions of training examples. The net effect is that this toy implementation of dense performs exactly the paraphrase expansions we designed it to, making dense look better than it would on a genuinely out-of-distribution corpus.
+
+**Why hybrid doesn't score 5/5.** For the pure-paraphrase queries (Q3 and Q4), BM25 scores 0 on the correct document. The RRF formula only incorporates BM25 docs that scored above 0 — because including zero-score docs would mean sorting documents that BM25 literally couldn't distinguish from each other, which would inject noise rather than signal. So on those queries, hybrid is effectively dense-only via RRF, and dense was already getting it right. For the rare-identifier queries (Q1 and Q2), both BM25 and dense find the right doc, so hybrid does too. The one query where hybrid doesn't strictly dominate is a consequence of the toy dense implementation performing at ceiling — in a real corpus with a real embedding model, dense would have its own failure cases.
+
+**What production literature actually shows.** In real systems, dense retrieval does not score 5/5 on every query. The BEIR benchmark (26 retrieval datasets across domains) shows that no single retrieval method wins on all corpora — dense methods outperform BM25 on some but not others, and hybrid consistently achieves higher or equal nDCG@10 than either alone across the dataset collection. Pinecone's 2024 hybrid study found that roughly 30% of queries where pure dense retrieval fails are correctly handled by hybrid (details in In Practice). The asymmetry you'd see in a real system is closer to 60/40 or 55/45 in terms of which method wins across a diverse query log — and hybrid recovers most of the failures from either side.
+
+The sim is a pedagogical instrument, not a benchmark. It shows you the mechanism: what BM25 wins, what dense wins, and how RRF combines them. Take the exact numbers as illustrative, not as production performance figures.
+
+## Merging rankings (RRF)
+
+You now have two ranked lists — one from BM25, one from dense. They are not directly comparable. BM25 scores are unbounded positive numbers that depend on term frequency, IDF, document length, and the k1/b parameters. Cosine similarity is bounded to [0, 1] (or [-1, 1] for signed embeddings). Trying to add `0.7 * cosine_score + 0.3 * bm25_score` requires these numbers to live on the same scale. They don't.
+
+Reciprocal Rank Fusion solves this by discarding scores entirely and working only with **ranks**.
+
+**The formula.** For a document `d` and a set of ranked lists `R`:
+
+```
+RRF(d) = Σ_R  1 / (k + rank_R(d))
+```
+
+Where `k` is a constant (default: 60, from Cormack et al. 2009) and `rank_R(d)` is the position of document `d` in ranked list `R` (1-indexed).
+
+**Worked example.** Document A appears at rank 3 in the BM25 list and rank 1 in the dense list. Document B appears at rank 1 in BM25 and rank 4 in dense.
+
+```
+RRF(A) = 1/(60+3) + 1/(60+1) = 0.01587 + 0.01639 = 0.03226
+RRF(B) = 1/(60+1) + 1/(60+4) = 0.01639 + 0.01563 = 0.03202
+```
+
+Document A edges out document B because its top-1 dense rank is worth slightly more than document B's top-1 BM25 rank. In practice, with k=60, the rank values are smoothed — the difference between rank 1 and rank 3 is modest, and the difference between rank 3 and rank 20 is also modest. This smoothing is deliberate: it means a document that ranks solidly in the top 10 for both lists beats one that ranks #1 in one list and #50 in the other. Consistent moderate relevance across both signals beats extreme relevance in one.
+
+**Why k=60.** The constant k smoothly controls how steeply ranks are discounted. Smaller k makes the formula more aggressive — rank 1 is worth dramatically more than rank 2. Larger k flattens the curve — all top-20 docs receive nearly equal weight. k=60 was the value Cormack, Clarke, and Buettcher found worked well across the TREC retrieval collections when combining multiple runs. It is rarely worth tuning; the improvement from k=40 versus k=60 versus k=80 is minimal on most corpora.
+
+**Why not weighted score normalization?** The main alternative is min-max or z-score normalizing each list's scores, then taking a weighted sum. The fundamental problem: BM25 score distributions change as you add documents to the corpus (because IDF depends on N and df), as document lengths change (because b and avgdl interact), and as the query vocabulary changes. A normalization constant calibrated on one corpus snapshot goes stale. RRF sidesteps the entire problem because it is score-distribution-agnostic. The rank of document X in a list of 1,000 is meaningful regardless of what the underlying scores are.
+
+Cite Cormack, Clarke, Buettcher, "Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods," SIGIR 2009.
+
+## Putting it together
+
+You now have the three pieces: BM25 (lexical retrieval), dense (semantic retrieval), and RRF (fusion). The production pattern combines all three and optionally hands the result to a reranker.
+
+```
+query → [BM25 (parallel)]  ↘
+                             → [RRF merge, top-30] → [optional: rerank → top-5] → LLM
+         [dense (parallel)] ↗
+```
+
+The two retrieval calls are independent and can be parallelized — BM25 over an inverted index (Elasticsearch, OpenSearch, Lucene) and dense over a vector index (HNSW, IVF). Both finish in roughly 20–80ms. RRF merge is O(n log n) over the two lists and takes under 1ms. The reranker adds 100–150ms if present.
+
+This is not an advanced configuration. Weaviate has built-in hybrid search (BM25 + dense + RRF) as a first-class feature. Pinecone's hybrid mode pairs sparse vectors (BM25-style or SPLADE) with dense vectors. Vespa has supported multi-field retrieval and rank fusion for years. Elasticsearch added vector search, so the traditional "Elastic for BM25, separate vector DB for dense" architecture is consolidating. When you pick up any production RAG framework and look at how its retrieval works, you will find this pattern.
+
+**The connection to reranking.** In chapter 4, the pipeline diagram showed BM25 + dense running in parallel before the reranker but did not explain the BM25 side. This chapter fills that gap. The reranker receives a merged top-30 from hybrid retrieval — not just the top-30 from dense alone. The reranker's input quality is higher because hybrid already recovered the queries where dense would have buried the correct document. The two chapters form a single pipeline; reranking is the precision stage, hybrid retrieval is the recall stage.
+
+## In practice
+
+### What BM25 actually computes
+
+The formula parameters appear by name in nearly every search-engine configuration file. Knowing what they mean lets you read and reason about those configs.
+
+- `tf` = term frequency of the query term in the document. How many times does the word appear?
+- `IDF(term)` = log of the inverse document frequency. If a term appears in 1 of 1,000 documents, IDF is high; if it appears in 900 of 1,000, IDF is near 0. This is the weight that makes rare terms powerful.
+- `k1` = term frequency saturation control. With k1=1.5 (the default), TF quickly saturates — a term appearing 10 times is not 10x more informative than a term appearing twice. Legal values are 1.2–2.0. Higher k1 means TF has more influence before saturation.
+- `b` = length normalization. b=0.75 (default) means document length is partially factored out. b=0 disables length normalization entirely; b=1 fully normalizes by length. For short documents (FAQ answers, support ticket resolutions), lower b is often better — long documents are not more informative by virtue of length alone.
+
+In Elasticsearch, these parameters appear in the `similarity` block of the index mapping:
+
+```json
+"settings": {
+  "similarity": {
+    "custom_bm25": {
+      "type": "BM25",
+      "k1": 1.5,
+      "b": 0.75
+    }
+  }
+}
+```
+
+OpenSearch, Lucene, Solr, and Vespa use the same parameter names. BM25 is the default scoring for full-text fields in all of them.
+
+### What real systems use
+
+**Systems with native hybrid:** Weaviate ships BM25 + dense + RRF as a single `.hybrid()` query. Pinecone hybrid mode pairs a dense vector with a sparse vector per document (either BM25-style TF-IDF or SPLADE learned sparse embeddings). Vespa supports arbitrary ranking expressions over multiple retrieval operators — the most flexible option for teams that need to tune the fusion logic. Qdrant added sparse vector support as of late 2023, making hybrid viable without a separate BM25 service. Milvus added sparse-dense hybrid in 2024.
+
+**The split-stack architecture.** Many teams that built dense retrieval before these native options were available run Elasticsearch (BM25) and a separate vector DB (Pinecone, Weaviate, or a self-hosted HNSW index) as two independent services. The application layer fires both queries in parallel, collects the two ranked lists, runs RRF in application code, and passes the merged result to the reranker or LLM. This is perfectly valid and has the advantage of letting you tune the BM25 and dense indices independently. The disadvantage is operational complexity: two services to monitor, scale, and keep in sync.
+
+### The 30% number
+
+Pinecone's 2024 hybrid study ("Hybrid Search: A Tale of Two Tries") found that approximately 30% of queries where pure dense retrieval fails are correctly handled by hybrid. Translated: if your dense-only RAG misses on 100 queries, hybrid would get about 30 of those right.
+
+The exact number varies by corpus:
+
+- **High-identifier corpora** (legal contracts, error logs, technical docs with version numbers and SKUs): the number is higher, often 40–50%, because BM25's rare-token advantage applies to a large fraction of the query log.
+- **Conversational / prose corpora** (general Q&A, customer support with natural language): the number is lower, typically 15–25%, because users phrase their queries more naturally and fewer queries depend on exact token matching.
+- **Mixed corpora** (developer docs with both prose tutorials and API references): typically 25–35%, which is where the 30% rule of thumb comes from.
+
+Use this number when someone asks "is hybrid worth the complexity?" For most production corpora, it is. An easy framing: hybrid is the default, not an upgrade.
+
+### RRF vs weighted score normalization
+
+RRF is the default for a reason, but teams often reach for weighted score combination first because it looks more intuitive. Here is why weighted combination breaks in production.
+
+**Score distribution drift.** BM25 scores are a function of the corpus: as you ingest new documents, the IDF of every term changes, which changes every document's BM25 score. A normalization constant calibrated on corpus snapshot A is wrong on corpus snapshot B. This is not hypothetical — any production system that ingests documents continuously will see this.
+
+**Scale mismatch.** BM25 scores for rare-term queries can be 10–20x higher than for common-term queries on the same corpus. Cosine scores range from 0 to 1. A formula like `0.7 * cosine + 0.3 * bm25` behaves very differently on a query where BM25 returns a score of 15.3 versus one where it returns 0.4.
+
+**RRF sidesteps both problems.** Rank is dimensionless. Whether the BM25 top-1 doc scored 15 or 0.4, it contributes exactly `1/(k+1)` to the RRF score. New documents in the corpus change ranks but not the formula's invariants.
+
+The default k=60 is rarely worth tuning. If you do tune: smaller k (e.g. 20) gives more aggressive top-rank emphasis — the gap between rank 1 and rank 5 is larger. Larger k (e.g. 100) flattens the weights — all top-20 docs are treated nearly equally. Start at 60 and only change it if you have retrieval evals that show a clear regression or improvement.
+
+### Sparse-dense vs lexical-dense
+
+You will see both terms in the literature. They refer to the same idea at different levels of abstraction.
+
+**Lexical-dense hybrid** refers specifically to pairing a traditional keyword scorer (BM25 or TF-IDF) with a dense embedding model. The keyword scorer produces a sparse inverted-index representation; the embedding model produces a dense vector. This is what most practitioners mean when they say "hybrid search."
+
+**Sparse-dense hybrid** is the more general category. In addition to traditional BM25, you can use *learned sparse representations* — SPLADE (Formal et al., 2021) and BGE-M3's sparse output head being the most common. These models produce sparse vectors where each dimension corresponds to a vocabulary token and the value represents its learned importance for the document. The sparse vector captures both exact-match signal and some semantic signal that a pure BM25 score would miss.
+
+In practice: start with BM25 because it requires no additional model, runs in Elasticsearch or OpenSearch you already have, and gets you most of the benefit. If you find that BM25 is failing on domain-specific vocabulary (technical jargon, abbreviations, compound terms) that a learned sparse model might handle better, evaluate SPLADE. The merge mechanism is the same — RRF or weighted combination — regardless of which sparse component you use.
+
+### The single highest-leverage hybrid trick
+
+**Use RRF, not weighted score normalization.** This bears repeating as a standalone principle because most teams don't follow it initially.
+
+When engineers first add BM25 to a dense-only pipeline, the natural instinct is to normalize both score lists to [0, 1] and take a weighted sum: `alpha * dense + (1 - alpha) * bm25`, where alpha is tuned on an eval set. This works at evaluation time. It breaks in production for the score-distribution-drift reasons described above.
+
+The fix is trivially simple: sort each list by score, compute RRF from the ranks, merge. Zero normalization required. If you do nothing else from this chapter, replace the weighted sum with RRF. You will see more stable behavior as your corpus grows.
+
+### The failure mode you will see in production
+
+> "We added BM25 to our dense-only pipeline. Eval improved. Production p99 latency doubled."
+
+This is a real report. The root cause is almost always the same: BM25 over Elasticsearch and dense over a separate vector store, called **sequentially** instead of in parallel.
+
+The sequential version:
+```
+query → BM25 call (80ms) → dense call (80ms) → RRF → total: ~160ms
+```
+
+The parallel version:
+```
+query → BM25 call (80ms) ↘
+         dense call (80ms) ↗ → RRF → total: ~80ms + a few ms for RRF
+```
+
+The fix is to issue both calls simultaneously in async code. In Python with asyncio this is two lines:
+
+```python
+bm25_results, dense_results = await asyncio.gather(
+    es_client.search(bm25_query),
+    vector_store.query(dense_query),
+)
+```
+
+In a non-async environment, use threads. The two calls are fully independent — there is no reason to wait for one before starting the other. If you are already running BM25 and dense in parallel, the total retrieval latency is the max of the two individual latencies, not the sum. Most production hybrid systems see retrieval latency under 100ms when both calls are parallelized.
+
+### Where hybrid fits in the bigger system
+
+```
+query → [BM25 (parallel)]  ↘
+                             → [RRF merge, top-30] → [optional: rerank → top-5] → LLM
+         [dense (parallel)] ↗
+```
+
+This is the same pipeline diagram from chapter 4 (Reranking), now with the BM25 + dense + RRF stage fully described. In chapter 4, the left side of the diagram was labeled but unexplained — this chapter explains it.
+
+The dominant latency components:
+
+| Stage | Typical latency |
+|---|---|
+| BM25 (Elasticsearch, well-tuned) | 20–60ms |
+| Dense (HNSW index, 1M vectors) | 20–80ms |
+| RRF merge (application code) | < 1ms |
+| Cross-encoder reranker (top-30, optional) | 100–150ms |
+| LLM (not shown) | 500ms–several seconds |
+
+Running BM25 and dense in parallel means the retrieval stage total is roughly max(BM25, dense) + RRF ≈ 80ms. Adding a reranker takes it to ~230ms. The LLM call then dominates at 500ms or more. Put the retrieval optimization in perspective: hybrid retrieval with RRF adds near-zero latency versus dense-only when parallelized correctly.
+
+The full system this chapter series has been building:
+
+```
+[Source docs] → [Extract] → [Chunk] → [Embed] → [Index (inverted + vector)]
+                                                         ↓
+query → [BM25 + dense, parallel] → [RRF merge] → [Rerank → top-5] → [LLM]
+```
+
+Chunking (ch. 1) determines what units you can retrieve. Embeddings (ch. 2) enable dense retrieval. Retrieval (ch. 3) introduced top-K and MMR. Reranking (ch. 4) added the cross-encoder precision stage. Hybrid search (ch. 5, this chapter) fills in the parallel BM25 branch. The pipeline is now complete.
+
+## Recall — interview style
+
+The questions below are scenario-based, the way they come up in real AI engineering interviews and design reviews. What's graded is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag the failure modes before they happen.
+
+<RecallPrompt
+  concept="bm25"
+  question="**Production debug.** Your dense-only RAG returns garbage for queries containing error codes (`E_AUTH_4096`) and product SKUs (`XR-7700-B`). Marketing wants to ship this as a customer-support bot next week — you say wait. Walk through exactly what's happening at the embedding level for a query like `E_AUTH_4096`. What diagnostic would you run to confirm the hypothesis? What is your concrete one-week fix, and what retrieval metric would you use to verify the fix worked before shipping?"
+/>
+
+<RecallPrompt
+  concept="lexical-vs-semantic-retrieval"
+  question="**Design choice.** You're building RAG over a corpus that mixes structured technical docs (API reference with error codes, function names, version numbers like `v3.2.1`) and prose tutorials (how-to guides with natural language explanations). What retrieval setup do you propose? Specifically: (a) justify why you want both BM25 and dense rather than dense alone, (b) explain why you'd use parallel-with-RRF rather than BM25-then-dense or dense-then-BM25 in sequence, and (c) describe how you'd evaluate whether the hybrid setup is actually better than dense-only on your specific corpus — what query sample, what metric?"
+/>
+
+<RecallPrompt
+  concept="hybrid-search"
+  question="**Cost vs quality.** Your CTO asks: 'We're paying for Pinecone hybrid mode. It's about 30% more expensive than dense-only at our current volume. Is it worth it?' Quantify your answer. Your system processes 500,000 queries per month. Dense-only has 88% recall@5 on your eval set. You've measured that hybrid adds 4 percentage points to recall@5 on your corpus (close to the 30% recovery rate from the Pinecone study). If each missed recall event translates to a user escalation at $2 average cost, walk through the math. What additional data would you want before making a final recommendation?"
+/>
+
+<RecallPrompt
+  concept="reciprocal-rank-fusion"
+  question="**Senior eng pushback.** A teammate proposes `0.7 * dense_score + 0.3 * bm25_score` as the merge rule instead of RRF. They argue it's more interpretable and lets you tune the alpha parameter on your eval set. Push back with a concrete production failure mode. Specifically: (a) explain what happens to this formula when you ingest 500,000 new documents next quarter and the BM25 score distributions shift, (b) explain why the formula misbehaves when BM25 returns a score of 14.7 on one query and 0.2 on another, and (c) show the RRF alternative is two lines of code, not a complex engineering change."
+/>
+
+<RecallPrompt
+  concept="hybrid-search"
+  question="**Architecture call.** Your team currently runs Elasticsearch (BM25) for legacy search and Pinecone (dense) for the new RAG feature as separate services. You're proposing hybrid retrieval. Walk through the system-design tradeoffs of three options: (a) calling both services in parallel from application code, collecting the two ranked lists, running RRF in app code, and passing the merged result to the reranker — assess latency, operational complexity, and risk; (b) using Elasticsearch's built-in vector support to consolidate both retrievals into one service — assess migration cost, operational simplification, and the tradeoff in index flexibility; (c) migrating to a system like Weaviate or Vespa that has native hybrid search — assess total migration cost, long-term operational overhead, and what you gain that you couldn't get from options (a) or (b). Which option do you recommend if the team has one senior engineer to spare for the next quarter?"
+/>
