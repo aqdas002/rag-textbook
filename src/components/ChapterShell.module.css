@@ -1,0 +1,10 @@
+.shell { max-width: 850px; margin: 0 auto; }
+.main {
+  padding: 2rem 1.5rem 4rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.7;
+  color: #111827;
+}
+.main h1 { font-size: 2rem; margin-bottom: 1.5rem; }
+.main h2 { margin-top: 2.5rem; }
+.main code { background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; }
