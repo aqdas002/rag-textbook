@@ -83,29 +83,221 @@ This is the reason RAG systems use vector search rather than BM25 or simple keyw
 
 One nuance worth tracking: semantic similarity is about *sentence-level meaning in context*, not just word proximity. The embedding of a full chunk reflects all of its words jointly — which is why chunk size, from the previous chapter, still matters. A chunk that mixes two unrelated topics produces an embedding that sits ambiguously between them, scoring mediocre for both. Clean, focused chunks produce embeddings that sit cleanly in one region of the space — which is exactly what you want for high-precision retrieval.
 
-## Recall
+## In practice
+
+The previous sections gave you the mechanism. This one tells you what working
+engineers actually pick, why model choice is less important than people think,
+and where the textbook story silently fails in production.
+
+### Which embedding model do real systems use?
+
+As of 2025–2026, the shortlist most teams start from:
+
+- **OpenAI `text-embedding-3-small`**: 1536 dimensions, $0.02/1M tokens. The
+  cheap default for OpenAI shops. Good quality-per-dollar; works well on English
+  prose and code.
+- **OpenAI `text-embedding-3-large`**: 3072 dimensions, $0.13/1M tokens. Better
+  on hard retrieval benchmarks but rarely worth 6× the cost in production — the
+  gap closes fast when you tune chunking and query rewriting.
+- **Cohere `embed-english-v3`** and **`embed-multilingual-v3`**: 1024 dimensions.
+  Competitive on the MTEB leaderboard; multilingual variant is the default choice
+  when your corpus mixes languages.
+- **Voyage `voyage-2`**: 1024 dimensions. Consistently high on MTEB for code and
+  retrieval tasks; worth evaluating if OpenAI's quality is borderline for your corpus.
+- **Open-source: `BAAI/bge-large-en-v1.5`** and **`intfloat/e5-large-v2`**: both
+  768 dimensions, run locally. BGE and E5 regularly appear at the top of MTEB and
+  are the go-to choices for on-premise deployments or when you need to avoid API
+  egress costs.
+
+The [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) is the
+canonical benchmark. Use it to form a shortlist — but do not treat leaderboard
+rank as your answer. MTEB aggregates over many tasks and domains. A model that
+ranks third overall may outrank first place on your specific corpus. Always run a
+small retrieval eval on 50–100 of your real queries before committing to a model.
+
+### Dimensions matter and they don't
+
+More dimensions means larger vectors: more storage, slower ANN search, higher
+memory footprint. The quality ceiling rises too — but it rises steeply up to
+~512–768 dimensions and then flattens. Going from 256 to 768 dimensions typically
+produces a meaningful quality jump. Going from 768 to 1536 rarely does, and going
+from 1536 to 3072 almost never does on real RAG workloads.
+
+**Matryoshka embeddings** change this calculus. OpenAI's `text-embedding-3-large`
+and Nomic's `nomic-embed-text-v1.5` are trained with Matryoshka Representation
+Learning (MRL), which means you can truncate the vector to 256, 512, or 768
+dimensions and still get most of the quality. OpenAI reports that truncating
+`text-embedding-3-large` to 256 dimensions loses only ~6% of retrieval quality
+compared to the full 3072-dim vector — while cutting storage by 12×.
+
+In practice, production systems often run **512–768 dimensions** as the cost-quality
+sweet spot. If you're using a Matryoshka model, start at 512 and benchmark before
+paying for more dimensions. If you're on a fixed model without MRL, 1024–1536 is
+the practical ceiling worth paying for.
+
+### Embedding drift
+
+Embedding models get updated and deprecated. When OpenAI retired
+`text-embedding-ada-002` and introduced `text-embedding-3-small`, teams that
+migrated had an immediate operational problem: the two models produce vectors in
+*different geometric spaces*. A query embedded with `3-small` has no meaningful
+relationship to a chunk vector produced by `ada-002`. You cannot mix them.
+
+The correct migration plan is one of two things: (a) **re-embed everything** with
+the new model before switching query embedding, which means a one-time cost of
+re-indexing your entire corpus, or (b) **run two indexes in parallel** — queries go
+to both, results are merged — until the old index is drained. Option (b) is more
+complex but avoids a write-freeze on your corpus during re-indexing.
+
+The operational lesson: **log the model name with every embedding at write time**.
+Store it as metadata on each vector in your database. This lets you detect
+drift — if your query encoder and chunk encoder model names don't match at retrieval
+time, that is a bug, and you want to catch it before it silently destroys your
+retrieval quality. This is a common interview question; the correct answer is
+"re-embed everything" not "oh, it'll probably be fine."
+
+### Same encoder for queries AND chunks
+
+This sounds obvious but is violated constantly. If you embed chunks with model A
+and queries with model B, the vectors live in different spaces and cosine similarity
+between them is meaningless. Retrieval will appear to work (the search returns
+results) but the results will be arbitrary.
+
+The failure mode in practice: a team prototypes with `bge-large` for indexing,
+then switches to the OpenAI API for query embedding because it's "easier to call"
+and they "just want to test the LLM side." Retrieval tanks and they spend two days
+blaming prompt engineering. The fix: enforce at the application level that the same
+model name is used for both index writes and query embedding. The logging discipline
+described above (storing model name with every vector) catches this class of bug
+automatically.
+
+### Asymmetric vs symmetric search
+
+Some encoder models — specifically the E5 family (`intfloat/e5-large-v2`,
+`intfloat/e5-mistral-7b-instruct`) and the BGE family (`BAAI/bge-large-en-v1.5`) —
+require instruction prefixes:
+
+```
+Query embedding:   "query: How do I reset my password?"
+Passage embedding: "passage: To reset your password, navigate to Settings..."
+```
+
+Forgetting these prefixes degrades retrieval quality by **10–15%** on standard
+benchmarks. This is documented in each model's card; the fix is one line of code.
+OpenAI and Cohere models do not require this — their asymmetry is baked into the
+training objective without user-visible prefixes. Check the model card before you
+trust a benchmark. If you're seeing unexpectedly poor performance from an open-source
+model, missing prefixes are the first thing to check.
+
+### The single highest-leverage embedding trick
+
+Don't embed the raw chunk. Embed the **header chain + chunk**. If a chunk came from
+a Markdown document with headers `## Setup → ### Database`, prepend that chain so
+the embedding reads:
+
+```
+## Setup / ### Database / [chunk text here]
+```
+
+This is the embedding-specific application of the broader contextual retrieval
+technique covered in Chapter 1's "In practice" section — Anthropic's contextual
+retrieval paper reported retrieval-failure reductions of 35–67% from situating
+chunks in their document context. For embedding specifically, the mechanism is
+direct: the vector now encodes *where the chunk lives* as well as *what the chunk
+says*. A chunk that reads "click Save" is ambiguous in isolation; a chunk that reads
+"Setup / Database / click Save" is not.
+
+You don't need an LLM call for this. Static header prepending costs a few tokens per
+chunk at index time and is two lines of code. If you have an LLM-generated prefix
+available (from contextual retrieval), use that instead — it's better. But static
+headers beat raw chunks almost universally.
+
+### The failure mode you will see in production
+
+> "Retrieval was great on the test set. After launch, every question that uses a
+> product name, internal abbreviation, or team-specific jargon comes back empty."
+
+Here's what happened. Your test queries were written by the same people who wrote
+the documentation — they used the same vocabulary. Real users call the same thing by
+four different names: "SSO", "single sign-on", "SAML login", "the work login thing".
+The documentation says "SSO configuration". The embeddings for "how do I set up the
+work login thing" and "SSO configuration" may be close enough in a general-domain
+model — or they may not be, because "work login thing" is out-of-distribution
+relative to the encoder's training data.
+
+Root cause: **cosine similarity is anchored in training distribution**. Out-of-domain
+terminology lowers similarity scores even when the semantic intent is identical. The
+encoder has never seen your internal product names in context.
+
+Mitigations, in order of effort:
+
+1. **Query rewriting** (covered in a later chapter): use an LLM to normalize user
+   queries to canonical terminology before embedding. Low effort, high return.
+2. **Synonym expansion**: augment the query with known aliases before embedding, or
+   store aliases in chunk metadata and run a hybrid search.
+3. **Fine-tune the encoder**: if you have 1K+ labeled query/chunk pairs, fine-tuning
+   on your domain vocabulary with a contrastive objective (e.g. using the `sentence-transformers`
+   library) can close the distribution gap. More effort, durable gains.
+
+The eval to catch this before launch: include queries written by users (or proxies
+for users) in your offline eval set, not just queries written by the documentation
+authors. A retrieval@5 of 92% on author-written queries can coexist with 40% on
+user-written queries for the same corpus.
+
+### Where embeddings fit in the bigger system
+
+Embeddings are the bridge between two sides of the pipeline:
+
+```
+[Index time]
+[Chunks] → [Encoder] → [Vector index]
+
+[Query time]
+[User query] → [Encoder] → [ANN search against index] → [Top-K chunks] → [LLM]
+```
+
+The encoder is called **twice per request** in the query path (once at index time per
+chunk, then once per query). The index-time call is batch and offline; the query-time
+call is on the critical path. A model that takes 200ms to embed a query adds 200ms
+to every response. For open-source models served locally, this latency budget matters;
+hosted API models are typically 20–50ms and rarely a bottleneck.
+
+The choice of encoder model determines the geometry of the space the ANN search
+operates in. Everything downstream — what "nearest" means, which chunks surface —
+follows from that geometry. This is why encoder choice is a load-bearing architectural
+decision: you can change chunk size post-launch with a re-index, but changing encoder
+model requires re-embedding the entire corpus. Pick deliberately.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering
+interviews and design reviews. They're scenario-based: you're given a
+specific situation, constraints, and have to reason from principles. There
+is no single right answer to most — what's graded is whether you identify
+the right tradeoffs, propose specific (not generic) actions, and flag
+failure modes.
 
 <RecallPrompt
   concept="embedding"
-  question="Explain what an embedding is to a colleague who hasn't encountered the concept. Your explanation must include: what format it takes, what the model is trained to encode, and why it's useful for retrieval — and it must not use the word 'summary'."
+  question="**Production debug.** Your team migrated from `text-embedding-ada-002` to `text-embedding-3-small` last week. Since the migration, retrieval quality has collapsed — precision@5 dropped from 87% to 31% on your offline eval set. The code review shows the new model is being called correctly. Walk through your diagnosis and recovery plan. What is the most likely root cause, and what are the exact operational steps to fix it without a write-freeze on the corpus?"
 />
 
 <RecallPrompt
   concept="vector-space"
-  question="The embedding space sim showed clusters forming around royalty, animals, food, and programming. Why do those clusters appear? Trace the cause back to what an encoder model is trained to do — and explain why 'king' ends up closer to 'queen' than to 'pizza'."
-/>
-
-<RecallPrompt
-  concept="cosine-similarity"
-  question="Two embedding vectors can have very different magnitudes but still score 1.0 on cosine similarity. Why does cosine similarity ignore magnitude, and why is that the right behavior for comparing text embeddings? Give a concrete scenario where magnitude differences would mislead a dot-product-only similarity."
+  question="**Design choice.** Your team is debating embedding dimensions for a new RAG system: one engineer wants 256-dim Matryoshka-truncated vectors for cost, another wants 1536-dim OpenAI embeddings for quality, a third proposes 768-dim BGE open-source. You have 50M chunks, a $500/month vector storage budget, and a p95 query latency target of 150ms. Quantify the storage and latency tradeoffs for each option and make a recommendation with explicit conditions under which you'd change it."
 />
 
 <RecallPrompt
   concept="semantic-vs-lexical"
-  question="'The bank approved my loan' and 'the river bank flooded' share a content word but have low semantic similarity. 'The king reigned' and 'the monarch ruled' share no content words but have high semantic similarity. Explain the mechanism behind both — specifically, what about the training process causes this to happen."
+  question="**Failure-mode trace.** A RAG-powered support bot scores 91% retrieval@5 in your offline eval. After launch, users who ask about 'the SSO thing' or 'SAML login' or 'work credentials' never get relevant results — even though the documentation chapter titled 'SSO Configuration' directly answers their questions. Diagnose this failure at the embedding level: what is the root cause, what metric in your offline eval failed to surface it, and what are two specific mitigations you'd deploy first?"
 />
 
 <RecallPrompt
   concept="cosine-similarity"
-  question="You're building a RAG pipeline and your retrieval precision is poor. You suspect either chunking or embeddings is the cause. Describe a diagnostic: what experiment would you run to tell whether the problem is chunk size (from the previous chapter) versus the embedding model not capturing the right semantic relationships? What outputs would point to each cause?"
+  question="**Senior eng pushback.** A teammate opens a PR that normalizes all embedding vectors to unit length before storing them, arguing 'this makes dot product equivalent to cosine similarity, which is faster to compute at query time.' Is the underlying math correct? Is this the right call for your production system? Write the PR review comment — include what you'd approve, what you'd flag, and one scenario where this optimization would actually hurt retrieval."
+/>
+
+<RecallPrompt
+  concept="embedding"
+  question="**Architecture call.** Your CTO asks: 'Why are we building RAG at all? GPT-4 has a 200K token context window — can't we just stuff the entire knowledge base in the prompt?' You have 50M tokens of documentation. Give a concrete, numbers-grounded answer that addresses cost, latency, and retrieval quality — and describe the one scenario where the CTO's approach actually is the right call."
 />
