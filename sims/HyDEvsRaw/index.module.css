@@ -1,0 +1,255 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── Query selector ── */
+
+.queryRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.queryLabel {
+  flex-shrink: 0;
+}
+
+.querySelect {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.9em;
+  background: white;
+  cursor: pointer;
+}
+
+/* ── Two-column layout ── */
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+@media (max-width: 640px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Panel ── */
+
+.panel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.panelTitle {
+  margin: 0 0 0.25rem;
+  font-size: 0.875em;
+  color: #374151;
+  font-weight: 700;
+}
+
+/* ── Query display box ── */
+
+.queryBox {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8em;
+}
+
+.queryBoxLabel {
+  font-weight: 600;
+  color: #1e40af;
+  margin-right: 0.3em;
+}
+
+.queryBoxText {
+  margin: 0.15rem 0 0;
+  color: #1e3a8a;
+  line-height: 1.4;
+}
+
+/* ── Hypothetical answer box ── */
+
+.hypotheticalBox {
+  background: #fdf4ff;
+  border: 1px solid #e9d5ff;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78em;
+}
+
+.hypotheticalLabel {
+  display: block;
+  font-weight: 600;
+  color: #6b21a8;
+  margin-bottom: 0.25rem;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.hypotheticalText {
+  margin: 0;
+  color: #4a1d96;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* ── Chunk cards ── */
+
+.retrievalSubtitle {
+  margin: 0;
+  font-size: 0.75em;
+  color: #6b7280;
+}
+
+.chunkCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: white;
+  font-size: 0.8em;
+}
+
+.correctChunk {
+  border-color: #059669;
+  background: #ecfdf5;
+}
+
+.rankBadge {
+  background: #6366f1;
+  color: white;
+  border-radius: 999px;
+  padding: 0.1em 0.45em;
+  font-size: 0.78em;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chunkText {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.checkMark {
+  color: #059669;
+  font-weight: 700;
+  margin-right: 0.25em;
+}
+
+/* ── Quality indicator ── */
+
+.qualityIndicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78em;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.qualityDot {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.qualityLabel {
+  line-height: 1.3;
+}
+
+/* ── Annotation ── */
+
+.annotation {
+  font-size: 0.78em;
+  color: #059669;
+  font-weight: 600;
+  background: #ecfdf5;
+  border: 1px solid #6ee7b7;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
+.annotationNeutral {
+  font-size: 0.78em;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
+/* ── Quality lift panel ── */
+
+.liftPanel {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  font-size: 0.875em;
+  line-height: 1.5;
+}
+
+.liftPositive {
+  color: #065f46;
+  font-weight: 600;
+}
+
+.liftNegative {
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.liftNeutral {
+  color: #92400e;
+  font-weight: 600;
+}
+
+.liftCost {
+  color: #374151;
+}
+
+/* ── Explainer panel ── */
+
+.explainerPanel {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 0.825em;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.pedagogicalNote {
+  display: block;
+  margin-top: 0.4rem;
+  color: #64748b;
+  font-style: italic;
+}
