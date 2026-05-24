@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "concepts": {
+    "chunk-size": {
+      "title": "Chunk size",
+      "prerequisites": [],
+      "chapter": "chunking",
+      "section": "why-chunks"
+    },
+    "semantic-boundaries": {
+      "title": "Semantic boundaries",
+      "prerequisites": ["chunk-size"],
+      "chapter": "chunking",
+      "section": "why-chunks"
+    },
+    "chunk-overlap": {
+      "title": "Chunk overlap",
+      "prerequisites": ["chunk-size"],
+      "chapter": "chunking",
+      "section": "overlap-as-glue"
+    },
+    "chunk-retrieval-impact": {
+      "title": "Chunking's impact on retrieval",
+      "prerequisites": ["chunk-size", "chunk-overlap"],
+      "chapter": "chunking",
+      "section": "retrieval-impact"
+    },
+    "chunk-size-tradeoff": {
+      "title": "The chunk-size tradeoff",
+      "prerequisites": ["chunk-size", "chunk-retrieval-impact"],
+      "chapter": "chunking",
+      "section": "the-tradeoff"
+    }
+  }
+}
