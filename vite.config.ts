@@ -16,6 +16,14 @@ export default defineConfig({
       '@content': path.resolve(__dirname, 'content'),
     },
   },
+  server: {
+    // WSL on /mnt/c — Windows filesystem doesn't fire native fs events to WSL,
+    // so HMR misses changes to MDX/sim files unless we poll.
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',
