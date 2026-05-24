@@ -4,7 +4,13 @@ import mdx from '@mdx-js/rollup';
 import remarkFrontmatter from 'remark-frontmatter';
 import path from 'node:path';
 
+// On GitHub Pages we live at https://<user>.github.io/<repo>/. The base path
+// must match for all asset URLs to resolve. Set VITE_BASE_PATH in CI for the
+// deploy build; default to '/' for local dev.
+const base = process.env.VITE_BASE_PATH ?? '/';
+
 export default defineConfig({
+  base,
   plugins: [
     { enforce: 'pre', ...mdx({ remarkPlugins: [remarkFrontmatter] }) },
     react(),

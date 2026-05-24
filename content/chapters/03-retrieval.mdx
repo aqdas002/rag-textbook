@@ -176,8 +176,8 @@ A typical production RAG retrieval call, broken down:
 
 | Step | Typical latency |
 |---|---|
-| Dense retrieval (HNSW index, <10M vectors) | 20–80ms |
-| Dense retrieval (IVF index, >100M vectors) | 30–150ms |
+| Dense retrieval (HNSW index, &lt;10M vectors) | 20–80ms |
+| Dense retrieval (IVF index, &gt;100M vectors) | 30–150ms |
 | Cross-encoder reranker, top-20 | 50–200ms |
 | MMR (if used) | 1–10ms |
 | **End-to-end p50 retrieval** | **50–300ms** |

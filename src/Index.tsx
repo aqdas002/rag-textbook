@@ -2,6 +2,8 @@ import { ChapterShell } from './components';
 import { chapters } from './lib/chapters';
 import styles from './Index.module.css';
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
+
 export function Index() {
   return (
     <ChapterShell title="RAG Textbook">
@@ -13,7 +15,7 @@ export function Index() {
       <ol className={styles.list}>
         {chapters.map(c => (
           <li key={c.id} className={styles.item}>
-            <a href={`/chapters/${c.id}`} className={styles.link}>
+            <a href={`${BASE}/chapters/${c.id}`} className={styles.link}>
               <span className={styles.order}>{String(c.order).padStart(2, '0')}</span>
               <span className={styles.title}>{c.title}</span>
             </a>

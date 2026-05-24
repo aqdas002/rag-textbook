@@ -74,6 +74,211 @@
       "prerequisites": ["relevance-diversity-tradeoff"],
       "chapter": "retrieval",
       "section": "mmr"
+    },
+
+    "two-stage-retrieval": {
+      "title": "Two-stage retrieval",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "reranking",
+      "section": "why-two-stages"
+    },
+    "cross-encoder": {
+      "title": "Cross-encoder reranker",
+      "prerequisites": ["two-stage-retrieval"],
+      "chapter": "reranking",
+      "section": "how-rerankers-work"
+    },
+    "bi-encoder-vs-cross-encoder": {
+      "title": "Bi-encoder vs cross-encoder",
+      "prerequisites": ["cross-encoder", "embedding"],
+      "chapter": "reranking",
+      "section": "how-rerankers-work"
+    },
+    "rerank-latency-tradeoff": {
+      "title": "Reranker latency vs quality tradeoff",
+      "prerequisites": ["cross-encoder"],
+      "chapter": "reranking",
+      "section": "the-cost-of-precision"
+    },
+
+    "bm25": {
+      "title": "BM25 keyword scoring",
+      "prerequisites": [],
+      "chapter": "hybrid-search",
+      "section": "the-other-retrieval"
+    },
+    "lexical-vs-semantic-retrieval": {
+      "title": "Lexical vs semantic retrieval",
+      "prerequisites": ["bm25", "cosine-similarity"],
+      "chapter": "hybrid-search",
+      "section": "different-failure-modes"
+    },
+    "reciprocal-rank-fusion": {
+      "title": "Reciprocal rank fusion (RRF)",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "hybrid-search",
+      "section": "merging-rankings"
+    },
+    "hybrid-search": {
+      "title": "Hybrid search (BM25 + dense)",
+      "prerequisites": ["lexical-vs-semantic-retrieval", "reciprocal-rank-fusion"],
+      "chapter": "hybrid-search",
+      "section": "putting-it-together"
+    },
+
+    "precision-recall-at-k": {
+      "title": "Precision@K and Recall@K",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "evals",
+      "section": "the-core-pair"
+    },
+    "mean-reciprocal-rank": {
+      "title": "Mean Reciprocal Rank (MRR)",
+      "prerequisites": ["precision-recall-at-k"],
+      "chapter": "evals",
+      "section": "rank-aware-metrics"
+    },
+    "ndcg": {
+      "title": "Normalized Discounted Cumulative Gain (nDCG)",
+      "prerequisites": ["precision-recall-at-k"],
+      "chapter": "evals",
+      "section": "rank-aware-metrics"
+    },
+    "faithfulness": {
+      "title": "Faithfulness (answer grounding)",
+      "prerequisites": ["precision-recall-at-k"],
+      "chapter": "evals",
+      "section": "end-to-end-quality"
+    },
+    "llm-as-judge": {
+      "title": "LLM-as-judge evaluation",
+      "prerequisites": ["faithfulness"],
+      "chapter": "evals",
+      "section": "scaling-evaluation"
+    },
+    "eval-set-construction": {
+      "title": "Building an eval set",
+      "prerequisites": ["precision-recall-at-k"],
+      "chapter": "evals",
+      "section": "the-eval-set-is-the-product"
+    },
+
+    "knowledge-graph": {
+      "title": "Knowledge graph (entities + relationships)",
+      "prerequisites": [],
+      "chapter": "graph-rag",
+      "section": "what-is-a-knowledge-graph"
+    },
+    "multi-hop-questions": {
+      "title": "Multi-hop questions",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "graph-rag",
+      "section": "where-vanilla-rag-breaks"
+    },
+    "entity-extraction": {
+      "title": "Entity and relationship extraction",
+      "prerequisites": ["knowledge-graph"],
+      "chapter": "graph-rag",
+      "section": "building-the-graph"
+    },
+    "graph-traversal-retrieval": {
+      "title": "Graph traversal retrieval",
+      "prerequisites": ["knowledge-graph", "multi-hop-questions"],
+      "chapter": "graph-rag",
+      "section": "retrieval-as-traversal"
+    },
+    "community-detection": {
+      "title": "Community detection + summarization",
+      "prerequisites": ["graph-traversal-retrieval"],
+      "chapter": "graph-rag",
+      "section": "microsoft-graphrag"
+    },
+
+    "react-loop": {
+      "title": "ReAct loop (Reason + Act)",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "agentic-rag",
+      "section": "the-react-pattern"
+    },
+    "query-decomposition": {
+      "title": "Query decomposition",
+      "prerequisites": ["react-loop"],
+      "chapter": "agentic-rag",
+      "section": "decomposing-complex-queries"
+    },
+    "multi-step-retrieval": {
+      "title": "Multi-step retrieval",
+      "prerequisites": ["react-loop", "top-k-retrieval"],
+      "chapter": "agentic-rag",
+      "section": "the-loop-in-practice"
+    },
+    "tool-use-in-retrieval": {
+      "title": "Retrieval as tool use",
+      "prerequisites": ["multi-step-retrieval"],
+      "chapter": "agentic-rag",
+      "section": "retrieval-is-just-one-tool"
+    },
+    "agent-cost-explosion": {
+      "title": "Agentic cost and latency",
+      "prerequisites": ["multi-step-retrieval"],
+      "chapter": "agentic-rag",
+      "section": "the-cost-explosion-risk"
+    },
+
+    "rag-caching": {
+      "title": "RAG caching layers",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "production",
+      "section": "the-three-caches"
+    },
+    "latency-budgets": {
+      "title": "Latency budgets and the critical path",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "production",
+      "section": "the-latency-budget"
+    },
+    "cost-management": {
+      "title": "Per-query cost management",
+      "prerequisites": ["latency-budgets"],
+      "chapter": "production",
+      "section": "what-a-query-actually-costs"
+    },
+    "rag-observability": {
+      "title": "RAG observability (tracing + logging)",
+      "prerequisites": ["latency-budgets"],
+      "chapter": "production",
+      "section": "tracing-every-query"
+    },
+    "retrieval-drift": {
+      "title": "Retrieval quality drift",
+      "prerequisites": ["eval-set-construction", "rag-observability"],
+      "chapter": "production",
+      "section": "drift-detection"
+    },
+
+    "query-rewriting": {
+      "title": "Query rewriting (LLM-based query expansion)",
+      "prerequisites": ["top-k-retrieval", "embedding"],
+      "chapter": "query-transformation",
+      "section": "rewriting-the-query"
+    },
+    "hyde": {
+      "title": "HyDE (Hypothetical Document Embeddings)",
+      "prerequisites": ["embedding", "top-k-retrieval"],
+      "chapter": "query-transformation",
+      "section": "embed-the-answer-not-the-question"
+    },
+    "sub-query-fusion": {
+      "title": "Sub-query fusion (multi-query retrieval)",
+      "prerequisites": ["query-rewriting", "reciprocal-rank-fusion"],
+      "chapter": "query-transformation",
+      "section": "many-queries-one-answer"
+    },
+    "query-routing": {
+      "title": "Query routing (intent-based dispatch)",
+      "prerequisites": ["query-rewriting"],
+      "chapter": "query-transformation",
+      "section": "routing-by-intent"
     }
   }
 }
