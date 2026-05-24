@@ -1,0 +1,97 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.sliderLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.sliderLabel input[type='range'] {
+  flex: 1;
+}
+
+.hint {
+  font-size: 0.8em;
+  color: #6b7280;
+  margin: 0 0 0.75rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+@media (max-width: 600px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.75rem;
+}
+
+.panelTitle {
+  margin: 0 0 0.5rem;
+  font-size: 0.85em;
+  color: #374151;
+}
+
+.docCard {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: white;
+  font-size: 0.85em;
+  margin: 0.25rem 0;
+}
+
+.rankBadge {
+  background: #6366f1;
+  color: white;
+  border-radius: 999px;
+  padding: 0.1em 0.45em;
+  font-size: 0.78em;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.docText {
+  flex: 1;
+}
+
+.scoreChip {
+  background: #e5e7eb;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-family: monospace;
+  font-size: 0.78em;
+  flex-shrink: 0;
+}
+
+.divergenceNote {
+  margin: 0.5rem 0 0;
+  font-size: 0.9em;
+  color: #374151;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+}
