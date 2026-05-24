@@ -1,0 +1,291 @@
+---
+id: agentic-rag
+title: Agentic RAG
+estimatedMinutes: 30
+concepts: [react-loop, query-decomposition, multi-step-retrieval, tool-use-in-retrieval, agent-cost-explosion]
+prerequisites: [top-k-retrieval, hybrid-search]
+---
+
+import { AgenticRetrievalLoop } from '@sims/AgenticRetrievalLoop'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## When one retrieval is not enough
+
+The previous chapter closed with GraphRAG's answer to multi-hop questions: pre-build an explicit graph so retrieval can follow edges. That solution works beautifully when you know in advance which entity relationships your queries will traverse. But there is a different class of query that GraphRAG cannot help with — queries where you genuinely do not know what to look for until you have already looked for something else.
+
+Three concrete cases:
+
+**The comparison query.** "How does Anthropic's total funding compare to OpenAI's?" A single retrieval returns a fragment about one company or the other, but not both — and even if it returns both, the retrieved chunks don't contain a computed difference. You need to retrieve Anthropic's total, then retrieve OpenAI's total, then subtract. The second search query is not knowable until you read the result of the first.
+
+**The discovery query.** "What are the open issues blocking the v2.1 release of the authentication service?" A single retrieval pulls chunks mentioning open issues and authentication service tickets — but nothing in those chunks tells you which five tickets the v2.1 release plan specifically requires. You first have to fetch the release plan to learn which tickets are gating. Then you have to look up the status of each ticket individually. The lookup targets are not in the question; they are in the answer to the first search.
+
+**The drill-down query.** "Show me the policy details for the regulation that the recent compliance memo referenced." The compliance memo is one document. The regulation it references is another, potentially with its own cross-references. A single embedding search on "policy details regulation compliance memo" will land somewhere in the middle — probably returning neither the memo nor the target regulation in full, because the semantic similarity space has no concept of "what this document points to." You have to read the memo first, extract which regulation it cites, then retrieve that regulation's policy section.
+
+All three queries share one structural property: **the retrieval query for step N depends on the result of step N-1.** No single embedding lookup, no matter how well-tuned your hybrid search is, can resolve that dependency. The retrieval sequence must be dynamic — chosen on the fly by something that reads the intermediate results.
+
+That something is an agent.
+
+## The ReAct pattern (Reason + Act)
+
+The ReAct pattern, introduced by Yao et al. in "ReAct: Synergizing Reasoning and Acting in Language Models" (2022), is the canonical framework for agents that interleave reasoning and tool use. The paper's core insight is simple: language models are better at using tools when they are allowed to think out loud before each action, and to interpret the result before taking the next action. Thought and action reinforce each other.
+
+The canonical ReAct loop has four elements that repeat until a stopping condition is met:
+
+```
+Thought  →  Action  →  Observation  →  [Thought → Action → Observation → ...]  →  Final Answer
+```
+
+Each element has a precise meaning:
+
+- **Thought**: The LLM reasons about the current state — what it knows, what it still needs, and what action to take next. This is free-form internal reasoning. It does not produce a user-visible output; it informs the next action.
+- **Action**: The LLM invokes a tool. In its most general form, an action is any function the LLM has been given access to. The key constraint: only one action fires per step. The result is not available until the action completes.
+- **Observation**: The tool returns a result. The LLM reads this result and incorporates it into its understanding of the problem. This sets up the next Thought.
+- **Final Answer**: When the LLM judges that it has enough information to respond, it exits the loop and generates the answer.
+
+One concrete cycle, using the comparison query above:
+
+```
+Thought: I need Anthropic's total funding raised. Let me search for that first.
+Action:  search("Anthropic total funding raised")
+Obs:     "Anthropic has raised approximately $7.6B as of 2024." [doc/anthropic-funding-total]
+
+Thought: Good. Now I need OpenAI's total.
+Action:  search("OpenAI total funding raised all rounds")
+Obs:     "OpenAI has raised approximately $13.0B, including $10B+ from Microsoft." [doc/openai-funding-total]
+
+Thought: I have both: Anthropic $7.6B, OpenAI $13.0B. I can compute the difference now.
+Action:  compute(13.0 - 7.6)
+Obs:     $5.4 billion
+
+Final Answer: OpenAI has raised approximately $5.4 billion more than Anthropic ($13.0B vs $7.6B).
+```
+
+Notice the action in step three: `compute(13.0 - 7.6)`. The action is not a retrieval. It is a calculation. This is the critical generalization that ReAct brings: **the "Action" is not always retrieval — it can be any tool the agent has access to.** A calculator, a Python execution environment, a database query, a web search, a file read, an API call. Retrieval is one action in a menu of possible actions.
+
+For RAG, the most common actions are `search(query_string)` — which runs a similarity search against the vector store and returns the top chunks — and `lookup(document_id)` — which fetches a specific known document by ID without going through retrieval. The distinction matters: `search` is exploratory (you don't know what you'll find); `lookup` is targeted (you've already identified what you need).
+
+The loop terminates when the LLM determines that it has enough information to answer. Without an explicit stopping mechanism, a naively implemented ReAct loop can run indefinitely — the LLM always finds a reason to retrieve one more document. We will return to this problem in the cost explosion section.
+
+## The loop in practice
+
+Before interacting with the simulation, make a prediction.
+
+<PredictGate
+  concept="multi-step-retrieval"
+  question="The sim shows three queries: (1) 'What's the difference in total funding raised between Anthropic and OpenAI?' — a comparison query. (2) 'What are the open issues blocking the v2.1 release of the authentication service?' — a discovery query. (3) 'Who is the CEO of Anthropic?' — a simple factoid. Before you run the sim: which query do you predict will cost the most in total LLM calls? And which query benefits most from agentic RAG over vanilla? Explain your reasoning."
+  hint="Think about which queries require information from a previous step before you can formulate the next search. A query that vanilla RAG answers correctly is a query where agentic adds only overhead."
+>
+  <AgenticRetrievalLoop />
+</PredictGate>
+
+Let's integrate what the sim reveals, query by query.
+
+**Query 1 — Decomposition (Anthropic vs OpenAI funding difference).** Vanilla RAG retrieves isolated funding facts but cannot compute the difference. The chunks it finds mention Anthropic's backers and OpenAI's Microsoft investment, but the exact comparable totals are hedged — "several billion dollars" is not a number you can subtract from another number. The agent decomposes the problem: retrieve Anthropic's total, retrieve OpenAI's total, then call `compute()`. Three steps, four LLM calls (including the final answer), cost roughly 4x vanilla. Vanilla failed; the agent succeeded. The decomposition pattern is the direct payoff for the added cost.
+
+**Query 2 — Refinement (v2.1 auth release blockers).** This is the discovery pattern at its most extreme. Vanilla RAG returns a list of open auth ticket IDs and some general information about the v2.1 release, but it cannot tell you which tickets specifically gate the v2.1 release — because that mapping lives in a release plan document that is not lexically similar to the query. The agent first fetches the release plan to learn the five gating tickets, then looks up each ticket's status individually. Seven steps, eight LLM calls, cost roughly 26x vanilla. This is the cost explosion in miniature: every ticket lookup is a sequential LLM call, and there is no way to parallelize them while preserving the loop's reasoning integrity. For queries of this type, agentic RAG is not optional — vanilla cannot produce a correct answer. The cost is the price of capability.
+
+**Query 3 — Simple factoid (CEO of Anthropic).** Vanilla RAG nailed this with a single retrieval. The chunk "Dario Amodei is the CEO of Anthropic" is the top-ranked result by cosine similarity, the answer is present in full, and no additional retrieval adds anything. The agentic system still ran a loop — it does not know in advance whether looping is needed, so it always pays the planning tax. Three LLM calls vs vanilla's one: 3x more expensive for the identical answer. This is the key cost lesson: **agentic systems add overhead to every query, not just the ones that benefit from it.** The query routing problem — deciding which queries need an agent loop — is not a nice-to-have; it is how you avoid paying Query 3's overhead at scale.
+
+## Retrieval is just one tool
+
+The sim's `compute()` action hinted at something that becomes central at production scale: retrieval is one tool in a menu, not a synonym for what agents do.
+
+Consider what an agent might need to do to answer "what was the average revenue per user for our top three enterprise customers last quarter?":
+
+1. `search("enterprise customer revenue Q3")` — find the right data sources
+2. `query_database("SELECT customer_id, revenue FROM enterprise_customers WHERE tier='enterprise' ORDER BY revenue DESC LIMIT 3 AND quarter='Q3-2024'")` — pull the actual numbers
+3. `execute_python("import numpy as np; np.mean([1.2e6, 0.9e6, 0.8e6])")` — compute the average
+
+None of steps 2 or 3 is retrieval. The agent is orchestrating a sequence of heterogeneous tools to produce an answer that none of them could produce alone.
+
+The production tool menus that teams actually build:
+
+| Tool | What it does | When the agent reaches for it |
+|---|---|---|
+| `search(query)` | Vector / hybrid retrieval over the corpus | Exploratory — looking for relevant context |
+| `lookup(doc_id)` | Fetch a specific document by ID | Targeted — already knows which doc is needed |
+| `calculator(expr)` | Safe arithmetic evaluation | Any query requiring a numeric computation |
+| `execute_python(code)` | Sandboxed Python execution | Statistical aggregation, data transformation |
+| `web_search(query)` | Live internet search | When the corpus is incomplete or outdated |
+| `read_file(path)` | Read a specific file from a store | Direct file access by known path |
+| `query_database(sql)` | SQL query against a structured data source | Structured / tabular data lookups |
+
+The Anthropic Claude tool-use API and OpenAI function-calling API are the production primitives that power this pattern. You define each tool as a JSON schema (name, description, parameters), include the schema in the system prompt, and the LLM generates structured JSON when it wants to call a tool. Your application code executes the call and returns the result as an observation. The loop is your code, not the model.
+
+This is the pivot point between "RAG" and "agents" as architectural categories. They are not separate systems — they are points on the same spectrum. Vanilla RAG is a one-step agent with exactly one tool (`search`) and exactly one allowed action per session. An agentic RAG system is a multi-step agent with a richer tool menu. The continuum runs from the simplest "retrieve then answer" pipeline all the way to fully autonomous agents that plan, execute, monitor, and revise across minutes or hours. What makes something "agentic" is that the retrieval plan is dynamic — the agent decides what to search for, when to stop searching, and whether to use retrieval at all.
+
+Most production teams building agents on top of RAG pipelines build a thin wrapper around the tool-use API rather than adopting a full framework. The wrapper is typically under 200 lines and gives them full observability into every step — which matters enormously for the cost problem we turn to next.
+
+## The cost explosion risk
+
+Every step in an agentic loop is an LLM call plus a tool call. A 5-step agent query makes 5-6 LLM calls (including the final synthesis) and between 2 and 7 retrieval operations, depending on how the loop branches. At Claude Sonnet pricing ($3/M input tokens, $15/M output tokens), those calls add up faster than the raw numbers suggest, because each call carries the full conversation context — the accumulated thoughts, actions, and observations from every prior step.
+
+Here is what this looks like in practice for the sim's three query types:
+
+| Query type | Agent steps | LLM calls | Approximate cost | vs Vanilla ($0.003) |
+|---|---|---|---|---|
+| Simple factoid (CEO query) | 2 | 3 | $0.009 | 3x |
+| Decomposition (funding diff) | 3 | 4 | $0.012 | 4x |
+| Refinement (release blockers) | 7 | 8 | $0.078 | 26x |
+
+The refinement query's cost is not an anomaly — it is what discovery-type queries structurally cost. Each of the seven ticket lookups is a sequential step because the agent cannot start lookup N+1 until it has decided that N's result was not already sufficient. If your product has users asking discovery queries at any meaningful volume, your cost structure changes category.
+
+Scale the math: at 1 query per second of complex discovery-type queries, at $0.078/query, you are spending $6,739/day in inference. For comparison, vanilla RAG at the same QPS costs $259/day. The delta is $6,480/day — $194,400/month — for answering queries that vanilla couldn't answer anyway. If those queries matter to your users, that cost is justified. If 80% of your traffic is simple factoids that vanilla handles correctly and you are routing them all through the agent loop, you are burning money on a planning tax that adds no value.
+
+The cost explosion is not a theoretical risk. It is the first production crisis most teams hit after shipping agentic features. The causes are almost always the same: no step limit, no cost cap, and — once you look at the traces — the agent retrying the same failed search four or five times because error handling was not implemented. Fixing this requires operational discipline, not just engineering intuition.
+
+## In practice
+
+The previous sections gave you the mechanism and the economics. This section tells you what working engineering teams actually do, what the real cost numbers look like in a live system, and where agentic RAG earns its cost — and where it doesn't.
+
+### Frameworks people use
+
+Most teams building agentic RAG in 2024-2025 start with a framework and narrow down to a custom layer as they understand their specific needs. The landscape:
+
+**LangChain / LangGraph.** The most widely used framework for building RAG and agent pipelines in Python. LangChain's older agent implementations use LCEL (LangChain Expression Language) and have good integration with every major vector store. LangGraph is the newer, state-machine-style replacement — it represents agent workflows as directed graphs with explicit state management, which makes retry logic, branching, and circuit breakers easier to implement correctly. If you're starting a new project today, start with LangGraph.
+
+**LlamaIndex Agents.** Tighter integration with vector retrieval pipelines than LangChain. If you are already using LlamaIndex for your RAG pipeline, the `ReActAgent` and `FunctionCallingAgent` are low-friction entry points. Less mature for complex multi-agent scenarios than LangGraph, but excellent for single-agent RAG workflows with tool use.
+
+**CrewAI.** A multi-agent orchestration framework where you define roles, goals, and backstories for each agent in a crew. Well-suited for workflows where different agents have different expertise — for example, a "researcher" agent that retrieves, a "writer" agent that synthesizes, and a "critic" agent that evaluates. Adds overhead vs. a single-agent loop; worth it when specialization improves output quality.
+
+**AutoGen (Microsoft).** A multi-agent conversation framework where agents communicate by passing messages. Suited for open-ended workflows where the agent composition is itself dynamic. Heavier than CrewAI; used more in research and enterprise automation than in user-facing RAG products.
+
+**Anthropic Claude tool use / OpenAI function calling.** The primitive APIs. Many teams — especially those prioritizing observability and cost control — roll their own thin wrapper on these rather than adopting a framework. The wrapper is typically under 200 lines: a loop that sends the conversation to the model, executes any tool calls the model requests, appends the result to the conversation, and repeats until the model stops calling tools or a hard limit is hit. Full control, full observability, no framework magic.
+
+**DSPy (Stanford).** A declarative framework for building and optimizing LLM pipelines. Rather than writing prompts manually, you define a program structure and DSPy compiles it to optimized prompts for your specific model. Increasingly popular for teams that want to optimize agentic pipelines for cost or quality without hand-tuning prompts. The learning curve is steeper than LangChain, but the optimization results for well-defined tasks can be substantial.
+
+### The cost reality
+
+Real numbers at Claude Sonnet pricing (~$3/M input tokens, ~$15/M output tokens), accounting for accumulated context across steps:
+
+| Agent complexity | Steps | LLM calls | Cost per query | Daily cost at 10 QPS |
+|---|---|---|---|---|
+| Simple (2-3 steps) | 2-3 | 3-4 | $0.005–0.01 | $4,320–$8,640 |
+| Medium (5-10 steps) | 5-10 | 6-11 | $0.02–0.05 | $17,280–$43,200 |
+| Complex (15+ steps with revisits) | 15+ | 16+ | $0.10–0.30 | $86,400–$259,200 |
+| Vanilla RAG baseline | 1 | 1 | $0.001–0.003 | $864–$2,592 |
+
+For comparison, vanilla RAG at 10 QPS costs roughly $1,700/day. A complex agentic query at the same QPS costs $86,000–$259,000/day. If only 1% of your traffic hits complex agentic queries, that tail drives a disproportionate share of your inference bill. This is why the intent classifier described below is the single most operationally important component in a production agentic RAG system.
+
+### The latency reality
+
+Each agent step is a sequential LLM call. You cannot parallelize steps within a single ReAct loop — step N's action depends on step N-1's observation. This means latency stacks linearly with step count.
+
+Typical p50 latency per LLM call for Claude Sonnet with a mid-length context: 0.5–1.5 seconds. A 5-step agent query at these rates takes 3–8 seconds to produce a final answer. A 10-step query: 5–15 seconds.
+
+Real chatbots cannot deliver this without UX accommodation. The production solution is streaming partial output: pipe the model's Thought tokens to the UI as they arrive, so users see the agent "thinking" in real time rather than staring at a spinner. LangChain, LlamaIndex, and the raw Anthropic/OpenAI streaming APIs all support this. Without streaming, agentic latency will produce abandoned sessions at step counts above 3-4.
+
+### Where agentic wins
+
+Agentic RAG is the right choice when the query structurally requires information discovered mid-loop:
+
+- **Multi-hop comparison queries.** "What's the difference between X and Y?" where X and Y live in separate documents and a delta must be computed.
+- **Exploratory data analysis.** "Dig into the Q3 underperformers — what's driving the drop?" The agent can iteratively narrow from the general question to specific data points, adjusting its search strategy as it learns.
+- **Drill-down workflows.** Any query of the form "show me the details of the thing that [other document] references" — compliance memos, release plans, spec cross-references.
+- **Queries requiring computation.** Statistical aggregation, code execution, mathematical derivation — anything where retrieval surfaces the inputs and the answer requires a computation step.
+- **Queries where the user doesn't know exactly what to ask.** "Help me understand why our auth service has been flaky this week" is not a retrieval query; it is an investigation that an agent can run on behalf of the user by exploring logs, tickets, and docs iteratively.
+
+Agentic RAG is the wrong choice for:
+
+- **Simple lookups.** "What is our return policy?" "Who is the CEO of X?" Vanilla RAG answers these in one call. An agent answers them in three calls at 3x the cost and 2x the latency.
+- **Queries where the answer is in a single well-indexed chunk.** If hybrid search with reranking reliably surfaces the right chunk in the top-3, agentic adds overhead without improving the answer.
+- **High-volume, low-complexity query distributions.** If your system handles 10,000 QPS and 90% of queries are simple lookups, routing everything through an agent loop is financially catastrophic.
+
+### Step limits and circuit breakers
+
+Every production agentic system needs hard step limits. Without them, an agent that gets confused will loop indefinitely — retrying the same search with slight query variations, never converging, and accumulating LLM call costs the entire time.
+
+Framework defaults are typically too high for production:
+- LangChain default `max_iterations`: 15
+- LlamaIndex default `max_iterations`: 10
+- AutoGen default: unbounded in some configurations
+
+Production teams typically set step limits to 5–7 and add per-query cost caps ($0.05 maximum in many internal systems). The right number depends on your query distribution — run your evaluation set through the agent and look at the step count distribution. The 95th percentile step count for correctly-answered queries is a reasonable upper bound for your step limit.
+
+Circuit breakers are the time-domain equivalent: if a query has been running for more than N seconds, abort and return a partial answer with an explanation. Production systems typically set this at 30–60 seconds, though user-facing chatbots often set it lower (15–20 seconds) to preserve perceived responsiveness.
+
+### The single highest-leverage agentic trick
+
+Add a `should_stop()` check after every observation. Before executing the next Thought, the LLM evaluates: "Do I have enough information right now to answer the original question confidently?" If yes, exit the loop immediately.
+
+Without this check, agents over-retrieve. They find an answer in step 3, then continue retrieving in steps 4 and 5 "to be thorough" — adding evidence that does not change the final answer but costs one LLM call per step. Over a large query volume, this waste is significant.
+
+The implementation is simple: append a structured evaluation step after each observation. Something like:
+
+```
+After each Observation:
+  Evaluate: "Given everything I've retrieved so far, can I now answer
+  the original question completely and accurately? Answer YES or NO."
+  If YES: go directly to Final Answer.
+  If NO:  continue to next Thought.
+```
+
+This single addition typically cuts agent step counts by 30–50% on real query distributions without meaningfully reducing answer quality, because the cases where it exits early are cases where additional retrieval was redundant anyway. It is the cheapest cost reduction available in an agentic system — one prompt addition, measurable in your next eval run.
+
+### The failure mode you will see in production
+
+> "Our agent inference costs are growing 10x faster than our user growth. We're now spending $50k/month on inference that was projected at $5k."
+
+This is the most common agentic RAG production crisis, and the root cause is almost always one of three things:
+
+**(a) No step limit.** The agent is iterating 15-20 steps on queries that need 3-5. Usually caused by poor error handling — the agent tries a search, gets an error or an empty result, retries with a slightly different query, gets another empty result, and continues indefinitely rather than concluding that the information is not in the corpus.
+
+**(b) No cost caps.** Individual high-complexity queries are not throttled. A small number of users with very complex queries are driving the majority of costs. Without per-query caps, a single malformed query can cost $1-2 in inference before the step limit (if any) kicks in.
+
+**(c) Routing everything through the agent loop.** The system was designed for the hard queries but is handling all queries — including simple lookups that vanilla RAG would answer correctly in one call.
+
+Mitigation steps, in order of impact:
+1. Enforce a hard step limit of 7 and a $0.05 per-query cost cap today. This stops the bleeding.
+2. Log every step, every tool call, and the per-query cost. You cannot optimize what you cannot see.
+3. Add the `should_stop()` check. This typically yields 30-50% cost reduction without touching answer quality.
+4. Cache repeated searches within a session. If the agent searches for the same query string twice (a common symptom of confused retry loops), return the cached result rather than making another retrieval call.
+5. Build the intent classifier to route simple queries to vanilla RAG.
+
+### Where agentic RAG fits in the bigger system
+
+The architecturally sound production system for mixed query traffic looks like this:
+
+```
+user query → [intent classifier: is this query agentic-worthy?] →
+  ├── simple → [vanilla RAG: retrieve → answer]
+  └── complex → [agent loop with step limit]:
+        [LLM: think] → [tool: retrieve / lookup / compute] →
+        [LLM: observe + decide] → [stop? → answer | continue]
+```
+
+The intent classifier is the key efficiency move. It answers: "Is this query the kind that requires iterative retrieval, or can vanilla handle it?" You do not need a large model for this. Options in increasing sophistication:
+
+- **Heuristic regex.** Does the query contain comparison language ("compare", "difference between", "how does X relate to Y")? Does it reference documents by other documents ("the regulation mentioned in")? Does it ask for computation ("average", "total", "how many")? A 20-line rule-based classifier routes correctly for a large fraction of real query distributions.
+- **Small classifier model.** Fine-tune a small model (DistilBERT or similar) on labeled examples from your production query logs. Takes a few days of engineering work and typically improves over heuristics by 10-15 percentage points on real distributions.
+- **LLM routing call.** Call a fast, cheap model (GPT-4o-mini or Claude Haiku) with a prompt: "Is this query simple enough for single-step retrieval or does it require multi-step reasoning? Respond YES or NO." Adds 100-300ms latency and a small cost per query, but generalizes well without labeled training data.
+
+The goal is not to be perfect — some simple queries will hit the agent loop and pay extra, some complex queries will be misrouted to vanilla and fail. The goal is to prevent the simple majority of your query traffic from incurring agentic overhead on every call.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and system design reviews. They are scenario-based: you are given a specific situation, constraints, and must reason from principles. There is no single right answer — what is evaluated is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="query-decomposition"
+  question="**Design choice.** Your team is building an analytics chatbot for product managers — questions like 'what's the difference in churn between cohorts A and B last quarter?' and 'who are our top 10 enterprise customers by ARR and what are their open support tickets?' Walk through whether you'd use vanilla RAG, GraphRAG, or agentic RAG for this product. Justify with the query distribution you expect — specifically, what fraction of queries require decomposition, multi-hop traversal, or computation, and why that fraction determines your architecture choice."
+/>
+
+<RecallPrompt
+  concept="agent-cost-explosion"
+  question="**Production debug.** Your agent chatbot's average cost per query has gone from $0.02 to $0.18 over two weeks. Daily inference costs are now $9k/day. The product hasn't changed. Diagnose the failure: what are the three most likely root causes in order of probability, what specific logs or metrics would you pull first to confirm each hypothesis, and what's the fastest fix you'd implement today while the longer-term solution is being built?"
+/>
+
+<RecallPrompt
+  concept="tool-use-in-retrieval"
+  question="**Cost vs quality.** Your CFO sees a $30k/month line item for agent inference and asks if you can cut it in half without losing functionality. Walk through three concrete things you'd try, in order: (1) a change you can make in the next hour, (2) an engineering task that takes a few days, and (3) an architectural change that takes a sprint. For each, estimate the expected cost reduction as a percentage and describe the quality tradeoff, if any."
+/>
+
+<RecallPrompt
+  concept="react-loop"
+  question="**Architecture call.** A teammate proposes routing 100% of user queries through an agent loop 'because it's strictly better than vanilla — agents can do everything vanilla can and more.' Push back with numbers. Use the sim's cost model: at $0.003/LLM call and 1,000 QPS where 80% of queries are simple factoids, calculate the daily cost of (a) routing all traffic through a 3-step agent loop vs (b) using an intent classifier that correctly routes 80% of traffic to vanilla RAG. What is the daily cost difference, and what query property would make your teammate's argument valid?"
+/>
+
+<RecallPrompt
+  concept="multi-step-retrieval"
+  question="**Failure-mode trace.** Your agent successfully answers complex queries in offline eval (90% correct over 100 test cases). In production, 30% of agent traces hit the step limit without producing an answer. The eval set has different characteristics than production traffic. Walk through what's likely different between eval and production query distributions, how you'd diagnose whether the issue is step limit too low vs. retrieval quality degradation vs. query complexity mismatch, and what changes you'd make to your eval set construction to catch this class of failure before the next production deployment."
+/>
