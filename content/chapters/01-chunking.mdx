@@ -1,0 +1,32 @@
+---
+id: chunking
+title: Chunking
+estimatedMinutes: 25
+concepts: [chunk-size, semantic-boundaries, chunk-overlap, chunk-retrieval-impact, chunk-size-tradeoff]
+prerequisites: []
+---
+
+import { ChunkBoundaryExplorer } from '@sims/ChunkBoundaryExplorer'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## Why chunks?
+
+Retrieval-Augmented Generation works by looking things up at answer time, against
+chunks carved out of your source documents. How you carve them matters more than
+most people realize.
+
+<PredictGate
+  concept="chunk-size"
+  question="If we set chunk_size = document_length (one chunk for the whole document), what happens to retrieval precision?"
+  hint="Think about what's being compared at retrieval time."
+>
+  <ChunkBoundaryExplorer initialChunkSize={128} />
+</PredictGate>
+
+Try moving the slider. Notice what happens to chunk boundaries — they cut
+right through sentences. That alone is a clue about the trade-offs.
+
+<RecallPrompt
+  concept="chunk-size-tradeoff"
+  question="In your own words: why do both very small (32-char) and very large (whole-document) chunks hurt retrieval? Use a concrete example."
+/>
