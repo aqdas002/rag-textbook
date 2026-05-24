@@ -87,29 +87,168 @@ There is no universal best chunk size. There is a best chunk size *for your
 corpus and your query distribution* — and the way to find it is to evaluate
 on real queries, not to guess.
 
-## Recall
+## In practice
+
+The previous sections gave you the mechanism. This one tells you what working
+engineers actually do, what real systems pick, and where the textbook story
+silently fails in production.
+
+### Numbers from real systems
+
+There is no community consensus on the right chunk size. A few data points
+from systems people actually run:
+
+- **Pinecone's documentation defaults**: ~512 tokens, 50-token overlap.
+- **LlamaIndex defaults**: 1024 tokens, 200-token overlap.
+- **Anthropic's contextual retrieval paper (2024)**: best results at 100–400
+  tokens for their evaluation corpus, with the addition of LLM-generated
+  contextual prefixes added to each chunk (more on this below).
+- **OpenAI cookbook examples**: typically 500–800 tokens.
+
+The spread is itself a signal: "best" chunk size is a corpus-specific
+hyperparameter, not a universal constant. The right move is to pick
+something in the 200–800 token range as a starting point and tune from
+there based on retrieval-quality evals on your actual queries.
+
+### Tokens, not characters
+
+Production systems chunk by **tokens** using `tiktoken` (OpenAI) or a
+model-specific tokenizer — not by characters. The sims above use characters
+because they're easier to visualize. The principle is identical; the units
+differ.
+
+Conversion rules of thumb for English: 1 token ≈ 4 characters ≈ 0.75 words.
+So a 500-token chunk is roughly 2000 characters or ~375 words. Non-English
+text and code tokenize differently — Chinese is closer to 1 token per
+character; Python is roughly 1 token per 3 characters because of all the
+indentation and short names.
+
+### The five levels of text splitting
+
+Greg Kamradt (LangChain) popularized this taxonomy of splitter sophistication:
+
+| Level | Splitter | When you use it |
+|---|---|---|
+| 1 | Fixed character/token | Quick prototype; uniform-style text |
+| 2 | Recursive character (`\n\n` → `\n` → `.` → ` `) | The 90% default for prose — what `RecursiveCharacterTextSplitter` does |
+| 3 | Document-specific (Markdown by headers, code by AST) | When document structure carries meaning — most production RAG |
+| 4 | Semantic (embed sentences, group by similarity) | When recursive splitting butchers your specific corpus |
+| 5 | Agentic (LLM proposes splits) | Research / very-high-stakes corpora — too expensive for routine use |
+
+Most production systems live at level 2 or 3. Level 4 sounds principled but
+rarely wins enough to justify the latency and cost at index time. Level 5 is
+mostly demos.
+
+### Document-type-specific gotchas
+
+Naive chunking destroys structured documents. The specific failures you'll
+hit in production:
+
+- **Code**: split by function or class boundary using `tree-sitter` or a
+  language-specific parser. Splitting Python by characters destroys
+  indentation and the resulting chunks don't even parse.
+- **Markdown**: split at headers, then prepend the header chain
+  (`## Setup → ### Database → [chunk text]`) to each chunk so retrieval
+  can find context-less subsections.
+- **PDFs**: the text-extraction layer is usually worse than your chunking.
+  `pypdf` strips tables, columns, and headers; tools like Unstructured.io
+  and LlamaParse preserve layout. Spend the effort on extraction quality
+  before tuning chunk size.
+- **Tables**: never mid-row chunk. Either keep the table intact (if it
+  fits) or extract it separately and store it as JSON/HTML in chunk
+  metadata.
+- **HTML**: parse with `BeautifulSoup`, drop `<nav>` / `<footer>` /
+  `<script>`, then chunk the remaining text. Otherwise every chunk
+  contains 200 tokens of navigation menu noise.
+
+### The single highest-leverage chunking trick
+
+**Prepend context to every chunk.** If you're chunking a document with
+sections, every chunk should start with `[Doc title] / [Section] / [chunk
+text]`. Anthropic's contextual retrieval paper formalizes this: they use an
+LLM to generate a 1-2 sentence context prefix per chunk that situates it in
+the broader document. They report retrieval-failure reductions of 35–67%
+across corpora.
+
+You don't need an LLM call for the basic version. Even just static header
+prepending recovers most of what fixed-size chunking loses. It costs a small
+token overhead per chunk and is two lines of code. Cite this in interviews.
+
+### The failure mode you will see in production
+
+> "The chunk has the right keywords. The retriever found it. The LLM still
+> says it doesn't know."
+
+This happens because the chunk is a fragment lifted from a bullet list,
+table cell, or numbered step where the headers and surrounding context lived
+above the chunk boundary and got stripped. The chunk reads:
+
+```
+• 30 days from the date of purchase
+• must include original packaging
+• refunds processed within 5 business days
+```
+
+The query was "what is the return window?" The retriever happily returns
+this chunk — the embedding is close enough. But the LLM has no idea what
+"30 days from the date of purchase" refers to. The header *"Returns Policy"*
+lived above the bullet list and got stripped at chunking.
+
+The header-prepending trick above fixes this. So does using
+`RecursiveCharacterTextSplitter` with `MarkdownHeaderTextSplitter` chained
+in front. The fact that this is the most common production RAG failure and
+the fix is "prepend the header" is one of those things you should walk into
+an interview already knowing.
+
+### Where chunking fits in the bigger system
+
+In a production RAG pipeline, chunking is one step in:
+
+```
+[Source docs] → [Extract text] → [Clean/normalize] → [Chunk] →
+  [Embed] → [Index] → ... query path ...
+```
+
+It is the step that determines what units retrieval can return. Every
+choice you make here propagates downstream: too small and retrieval can't
+return enough context to answer; too large and the LLM context fills up
+with irrelevant text. Tuning chunk size in isolation rarely wins;
+**measuring end-to-end retrieval quality on real queries** is the only
+honest evaluation.
+
+The next chapter — Embeddings — picks up where this one ends: once you
+have chunks, what does it mean to compare them to a query?
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering
+interviews and design reviews. They're scenario-based: you're given a
+specific situation, constraints, and have to reason from principles. There
+is no single right answer to most — what's graded is whether you identify
+the right tradeoffs, propose specific (not generic) actions, and flag
+failure modes.
 
 <RecallPrompt
   concept="chunk-size-tradeoff"
-  question="Explain in your own words why both very small (50-char) and very large (5000-char) chunks hurt retrieval. Use a concrete example."
-/>
-
-<RecallPrompt
-  concept="chunk-overlap"
-  question="When does overlap matter most? Give a specific scenario where setting overlap=0 would lose information."
+  question="**Production debug.** A customer complains your RAG-powered support bot returns 'I don't have information about that' for a question whose answer is clearly in their documentation. You check the retrieval logs and confirm the relevant chunk IS in the retrieved top-5. What's likely wrong, and what are the first three specific things you'd check in the chunking pipeline?"
 />
 
 <RecallPrompt
   concept="semantic-boundaries"
-  question="Fixed-size chunking is unaware of sentence and paragraph boundaries. Describe one document type where this is acceptable and one where it would be a problem."
+  question="**Design choice.** You're building RAG over a corpus of legal contracts — 20–100 page PDFs with deeply nested clauses (Section 4.3.1.a), cross-references ('as defined in Section 2.1'), and tables of fees. Walk through your chunking strategy: what splitter, what size, what metadata you attach, and name two specific things that fail if you use a naive 512-token fixed-size splitter on this corpus."
+/>
+
+<RecallPrompt
+  concept="chunk-overlap"
+  question="**Cost vs quality.** Your vector store has 50M chunks averaging 200 tokens. A teammate proposes halving the chunk size to 'get better precision.' At $0.13 per 1M tokens for embedding (one-time) and roughly $0.05 per GB-month for vector storage, quantify the impact on (a) re-embedding cost, (b) index storage, (c) query-time top-K latency. Under what corpus / query conditions does this swap actually improve end-to-end retrieval quality?"
 />
 
 <RecallPrompt
   concept="chunk-retrieval-impact"
-  question="In the retrieval-impact sim, precision dropped when chunk_size was very large. Why? Trace through what the keyword-similarity score actually computes."
+  question="**Failure-mode trace.** A RAG support bot looks great in offline eval (retrieval@5 = 92%). After launch, you notice questions about 'returns policy' always retrieve chunks from the 'returns process' page — never the actual policy page. Trace this back to a specific chunking failure. What eval metric would have caught this before launch, and why did retrieval@5 miss it?"
 />
 
 <RecallPrompt
   concept="chunk-size"
-  question="Imagine you're asked 'what chunk size should I use for my RAG system?' by a colleague. Explain why 'it depends' is the only correct answer — but also give them a starting heuristic and how to refine it."
+  question="**Senior eng pushback.** A junior eng adds '512-token chunks with 50-token overlap, RecursiveCharacterTextSplitter, applied uniformly across all corpora' to your team's RAG wiki as the recommended default. As the senior on the team, what's your pushback? Rewrite the wiki entry."
 />
