@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.sim-state.json
+.sim-state.json.tmp
+.DS_Store
+*.log
+.vite/
+.superpowers/

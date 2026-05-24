@@ -1,0 +1,13 @@
+.prompt {
+  background: #f3f4f6;
+  border-left: 4px solid #6366f1;
+  padding: 1rem;
+  border-radius: 4px;
+  margin: 1.5rem 0;
+}
+.question { font-weight: 600; margin: 0.5rem 0; }
+.prompt textarea { width: 100%; font-family: inherit; margin: 0.5rem 0; }
+.instruction { font-size: 0.9em; color: #4b5563; font-style: italic; }
+.gradePanel { background: white; padding: 0.75rem; border-radius: 4px; margin-top: 0.75rem; }
+.comment { font-size: 0.9em; color: #4b5563; margin-top: 0.25rem; }
+.committed { color: #047857; font-weight: 600; }

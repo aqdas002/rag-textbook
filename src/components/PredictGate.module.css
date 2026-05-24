@@ -1,0 +1,26 @@
+/* src/components/PredictGate.module.css */
+.gate { margin: 1.5rem 0; }
+.predictPanel {
+  background: #fff8e7;
+  border-left: 4px solid #f59e0b;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+}
+.predictPanel textarea {
+  width: 100%;
+  font-family: inherit;
+  margin: 0.5rem 0;
+}
+.predictionShown {
+  background: #ecfdf5;
+  border-left: 4px solid #10b981;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.locked { opacity: 0.4; pointer-events: none; filter: blur(1px); }
+.unlocked { opacity: 1; }
+.question { font-weight: 600; margin: 0.5rem 0; }
+.hint { font-style: italic; color: #6b7280; font-size: 0.9em; }

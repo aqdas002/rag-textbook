@@ -1,0 +1,11 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+.control { display: flex; align-items: center; gap: 1rem; }
+.control input { flex: 1; }
+.stats { font-size: 0.9em; color: #4b5563; margin: 0.5rem 0; }
+.svg { width: 100%; height: auto; display: block; margin-top: 0.5rem; }

@@ -1,0 +1,101 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.title {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+  color: #1e293b;
+}
+
+.instructions {
+  font-size: 0.9rem;
+  color: #6b7280;
+  margin: 0 0 0.75rem;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #374151;
+}
+
+.svgWrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.svgOverlay {
+  pointer-events: none;
+}
+
+.svgOverlay circle {
+  pointer-events: all;
+}
+
+.panel {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.neighborList {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+
+.neighborList li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+}
+
+.neighborDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.neighborWord {
+  flex: 1;
+  color: #1e293b;
+}
+
+.neighborScore {
+  font-family: monospace;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.purity {
+  margin: 0.5rem 0 0;
+  color: #475569;
+  font-size: 0.85rem;
+}

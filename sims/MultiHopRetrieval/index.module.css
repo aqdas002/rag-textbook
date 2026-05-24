@@ -1,0 +1,250 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  color: #1e293b;
+}
+
+.queryRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.queryLabel {
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+
+.querySelect {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.85em;
+  background: white;
+  cursor: pointer;
+}
+
+/* Main layout: graph left, retrieval right */
+.mainLayout {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .mainLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graphPanel {
+  min-width: 0;
+}
+
+.panelTitle {
+  margin: 0 0 0.4rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.svgWrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.svg {
+  display: block;
+}
+
+.svgOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* Right side: two retrieval columns */
+.retrievalPanel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+@media (max-width: 600px) {
+  .retrievalPanel {
+    grid-template-columns: 1fr;
+  }
+}
+
+.retrievalColumn {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.75rem;
+}
+
+.colSubtitle {
+  font-size: 0.75em;
+  color: #6b7280;
+  margin: 0 0 0.5rem;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.1em 0.5em;
+  font-size: 0.7em;
+  font-weight: 600;
+}
+
+.badgeGreen {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badgeRed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Chunk cards */
+.chunkCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: white;
+  font-size: 0.75em;
+  margin: 0.2rem 0;
+  line-height: 1.4;
+}
+
+.chunkRelevant {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.rankBadge {
+  background: #6366f1;
+  color: white;
+  border-radius: 999px;
+  padding: 0.1em 0.4em;
+  font-size: 0.78em;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chunkText {
+  flex: 1;
+  min-width: 0;
+}
+
+.failNote {
+  font-size: 0.75em;
+  color: #9f1239;
+  margin: 0.4rem 0 0;
+  padding: 0.3rem 0.5rem;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 3px;
+}
+
+/* Graph traversal path */
+.pathList {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  counter-reset: path-counter;
+}
+
+.pathStep {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.78em;
+  counter-increment: path-counter;
+}
+
+.pathStep::before {
+  content: counter(path-counter) ".";
+  font-weight: 700;
+  color: #6366f1;
+  font-size: 0.85em;
+}
+
+.pathNodeBadge {
+  display: inline-block;
+  color: white;
+  border-radius: 4px;
+  padding: 0.15em 0.5em;
+  font-weight: 600;
+  font-size: 0.9em;
+  width: fit-content;
+}
+
+.pathEdge {
+  color: #92400e;
+  font-size: 0.85em;
+  padding-left: 0.5rem;
+  font-style: italic;
+}
+
+.answerBox {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: #14532d;
+  margin-top: 0.4rem;
+}
+
+/* Bottom summary */
+.summaryPanel {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 0.8em;
+  color: #374151;
+  line-height: 1.5;
+}

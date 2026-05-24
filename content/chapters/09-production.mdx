@@ -1,0 +1,312 @@
+---
+id: production
+title: Production
+estimatedMinutes: 35
+concepts: [rag-caching, latency-budgets, cost-management, rag-observability, retrieval-drift]
+prerequisites: [hybrid-search, eval-set-construction]
+---
+
+import { PipelineBudget } from '@sims/PipelineBudget'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## The latency budget
+
+The previous chapter closed with a hard truth about agentic RAG: multi-step retrieval loops blow up cost and latency at the same time. That truth lives right at the edge of what a user will tolerate. Before you add one more feature to your pipeline, you need a concrete sense of how much time you have to spend.
+
+Nobody waits eight seconds for a search result. The numbers that practitioners actually use as targets:
+
+- **Interactive chat:** p50 < 1.5s, p99 < 3s
+- **Voice interfaces:** p50 < 800ms (hearing a delay longer than this destroys the illusion of a natural conversation)
+- **Batch or async pipelines:** budgets relax substantially — p50 can be 10–30s when the user is not watching a spinner
+
+Every component in your RAG stack consumes part of this budget. There is no neutral feature — there is no "add reranking for free." Every stage you enable is a latency debit.
+
+Here is what a typical non-agentic production RAG critical path actually costs in wall-clock time:
+
+| Stage | Typical p50 latency |
+|---|---|
+| Query embedding (OpenAI API network round-trip) | 40ms |
+| Dense vector search (HNSW index, cloud-hosted) | 60ms |
+| Cross-encoder rerank (Cohere API or self-hosted GPU) | 120ms |
+| LLM answer generation — first token (streaming) | 300–800ms |
+| LLM answer generation — full response | 800–3000ms |
+
+Add the non-generation stages: 40 + 60 + 120 = 220ms before any LLM call. Add LLM generation at a conservative 800ms for a short answer: 1020ms total. Add a longer synthesis response at 1500ms: 1720ms. You are already at the interactive chat p50 ceiling — and you have not touched an agent loop yet.
+
+Adding a ReAct loop from chapter 8 puts you at 4500ms+ per agent sequence (average 3 steps at ~1.5s per LLM call). That is more than double the p99 budget for interactive chat. This is not a theoretical concern. It is the first performance cliff real teams hit after they demo an agentic system internally and push it to users.
+
+The implication is concrete: the latency budget is the design constraint that forces you to choose your pipeline features deliberately rather than adding everything that improves accuracy in offline eval. Improved offline accuracy that violates the latency budget is not a production improvement.
+
+## What a query actually costs
+
+Latency tells you how long a user waits. Cost tells you how long your company can afford to run the service. For most teams, cost becomes the binding constraint before latency does — especially after agentic features ship.
+
+Start with the math for a non-agentic "production default" pipeline at Claude Sonnet pricing ($3/M input tokens, $15/M output tokens):
+
+| Component | Cost |
+|---|---|
+| Query embedding (20 tokens, text-embedding-3-small at $0.02/1M) | ~$0.0000004 |
+| Dense vector search (compute cost, amortized) | ~$0.00001 |
+| Cross-encoder rerank (Cohere Rerank API) | ~$0.002 |
+| LLM generation (8K input + 500 output at Sonnet pricing) | ~$0.031 |
+| **Total** | **~$0.033 per query** |
+
+The embedding call is essentially free. The reranker is cheap but not negligible. The LLM is the dominant cost by a factor of 10–15x. This matters because it points where optimization has leverage: cache the LLM output whenever possible, or reduce the LLM input token count.
+
+Now add the agentic multiplier from chapter 8. A 3-step agent query makes roughly 4 LLM calls and carries growing context across each. The multiplier range is 3–10x over vanilla for typical agent workloads, and up to 26x for complex discovery-type queries. The chapter 8 table showed $0.078 for an 8-step query. That is 23x the $0.0033 vanilla baseline.
+
+The daily cost math is where these per-query numbers become real business decisions. At 10 QPS sustained:
+
+- Queries per day: 10 × 86,400 = 864,000
+- Non-agentic at $0.033/query: $28,512/day — $855K/month
+- Agentic (average 5x multiplier) at $0.165/query: $142,560/day — $4.3M/month
+
+This is why the sim below exists. These numbers are not hypothetical. Before you unlock it, make a prediction.
+
+<PredictGate
+  concept="cost-management"
+  question="The 'Production default' preset in the sim has BM25 + Dense + RRF + Rerank + LLM, with a 50% cache hit rate, at 10 QPS. Before you open the sim: estimate the daily cost in dollars. Think through which stages are on, what they cost individually, and how a 50% cache hit rate affects the total. Write down your number."
+  hint="The reranker and LLM dominate. The cache cuts the full-pipeline cost on half of queries. Walk through the math stage by stage."
+>
+  <PipelineBudget />
+</PredictGate>
+
+Let's integrate what the sim reveals.
+
+**The production default preset.** With BM25 + Dense + RRF + Rerank + LLM at 50% cache hit rate and 10 QPS, the daily cost lands around $2,100–2,200/day. The reranker at $0.002/query and LLM at $0.004/query (the sim's modeled values) are the dominant line items. The 50% cache hit rate cuts the uncached portion in half — so the effective per-query cost is roughly half the full-pipeline cost on average.
+
+**The cache impact specifically.** The same production-default pipeline with 0% cache hit rate costs roughly $6/day more than with 50% cache hit rate at 10 QPS, because cache hits cost nothing and skip every stage. At higher QPS the delta scales linearly. At 100 QPS and 50% hit rate, you are saving ~$60/day vs. no cache — meaningful but not transformational on a $20K/month bill. Cache's real value is latency, not just cost: a cache hit returns in 5ms instead of 800–1000ms. That is a user experience improvement disguised as an infrastructure optimization.
+
+**The agentic preset.** Toggle the agent loop on and watch the daily cost jump by an order of magnitude. At 10 QPS with the agent enabled (4500ms latency, $0.015/query for 3 average steps), the daily cost exceeds what most teams budget for an entire product line. This is the cost explosion from chapter 8 made visible as a daily dollar number.
+
+## The three caches
+
+Every production RAG system should implement caching. The question is which of three fundamentally different caching strategies to reach for first, and in what order.
+
+### Query-to-answer cache (exact-match)
+
+The simplest cache: hash the incoming query string. If it matches a prior query, return the stored answer. No retrieval, no LLM call.
+
+Hit rates depend entirely on your query distribution:
+- Customer support / FAQ bots with bounded scope: 30–60%
+- Internal knowledge bots with repeat users: 15–30%
+- Open-ended chat assistants: 5–15%
+
+TTL should match how often your underlying data changes. Product documentation: 1 hour is reasonable. Status pages or availability content: 5 minutes or never cache. Personalized responses (answers tailored to a specific user's account): never cache — you will serve one user's private data to another.
+
+The exact-match cache is the highest ROI caching layer for support-oriented workloads because the query distribution is narrow. Users ask "how do I reset my password?" ten thousand times in slightly different ways — but the slightly different ways still cluster around a small number of semantically identical intents. The exact-match cache captures the most frequent cluster members; the semantic cache (below) captures the rest.
+
+### Embedding cache (query-to-embedding)
+
+Hash the query string. If it was embedded before, return the cached embedding vector. Costs the embedding call ($0.0000004 per query — effectively free), so the financial win is negligible. The latency win is 40ms, also small relative to the full pipeline.
+
+When does embedding caching matter? When you are running at extremely high QPS and your embedding endpoint is a latency bottleneck — not common with cloud-hosted embeddings, but relevant if you are running a self-hosted embedding model under load. Add it as a pass-through layer; it takes under 20 lines to implement. Do not optimize this before the other two.
+
+### Semantic cache (similar-query-to-answer)
+
+The most sophisticated and most dangerous cache. Incoming query is embedded. Its embedding is compared against all previously cached query embeddings via cosine similarity. If the highest-scoring match exceeds a threshold (typically 0.95), return the cached answer for that prior query.
+
+This captures queries that are semantically equivalent but not lexically identical. "How do I change my billing address?" and "Where can I update my payment address?" share a high cosine similarity and the same correct answer. An exact-match cache misses the second one; a semantic cache with threshold 0.95 hits it.
+
+The risk is threshold sensitivity. At 0.95, you will still get some false positives — semantically similar but meaningfully different queries that share an answer structure but need different specifics. "What are the terms for annual billing?" and "What are the terms for monthly billing?" may score 0.94 cosine similarity. At threshold 0.93, you return the wrong answer confidently.
+
+The rule of thumb: start at 0.97 and lower it carefully while monitoring for false positive cache hits (answer does not match what the query was asking). Track the metric "fraction of semantic cache hits that receive a thumbs-down from users" — it is your canary for threshold calibration.
+
+Semantic cache adds 10–25 percentage points of hit rate on top of what exact-match achieves, for most support-style query distributions. Build exact-match first, validate its hit rate and correctness, then layer semantic cache on top.
+
+## Observability — tracing every query
+
+A demo system has no observability needs — you know what it is doing because you just ran it. A production system sees queries you never anticipated, costs that accumulate invisibly, and failures that only appear in tail percentiles. You cannot manage what you cannot see.
+
+Production RAG systems instrument every query end-to-end. A complete trace includes:
+
+- **Input:** Raw query text, user ID (hashed), session ID, timestamp
+- **Retrieval:** Top-K chunks returned, with cosine/BM25 scores and source document IDs
+- **Reranking:** Reranked top-K with cross-encoder scores
+- **LLM input:** Assembled prompt token count, model used, context window utilization
+- **LLM output:** Response text, output token count, stop reason
+- **Per-stage latency:** Wall-clock time for each pipeline stage, not just end-to-end
+- **Per-stage cost:** Computed cost for each stage (embedding call, reranker call, LLM call)
+- **Downstream signal:** Thumbs up/down, follow-up question asked, session escalated to human
+
+The tools teams use to collect and surface this data:
+
+| Tool | Notes |
+|---|---|
+| **LangSmith** | Tight LangChain integration; per-trace UI is good; proprietary cloud |
+| **LangFuse** | Open-source LangSmith competitor; popular for self-hosting and cost control |
+| **Helicone** | Proxy-based interception of OpenAI/Anthropic API calls; minimal code change to add |
+| **Phoenix (Arize)** | Open-source; RAG-specific tracing primitives; strong for retrieval-quality metrics |
+| **Datadog / NewRelic APM** | For teams already on these platforms; less RAG-native but good integration coverage |
+| **OpenTelemetry + custom** | The vendor-neutral long-term path many platforms are migrating toward |
+
+The single most important signal to surface first is **per-query cost outliers**. If your p50 cost is $0.004 and your p99 cost is $0.30, something is exploding in the tail. The p99 cost is where your budget destruction lives, not in the average. Common causes:
+
+- An agent that ran into its step limit after 15 retries on a failed retrieval
+- A query that retrieved unusually large chunks, blowing through the LLM context and triggering multiple regeneration attempts
+- A reranker timeout that caused the system to fall back to a slower redundant path
+- A cache invalidation bug that caused a hot key to be re-fetched on every request after a deploy
+
+You find these causes by sampling p99 traces and reading them manually. The trace data is what makes that diagnosis possible. Without it, you see the bill; you do not see which 1% of queries caused 30% of it.
+
+## Drift — when production diverges from eval
+
+Chapter 7 covered building the eval set. Chapter 8 covered using it to gate agentic loops. This chapter closes the loop: what happens to your carefully constructed eval over time, and why does it stop predicting production quality?
+
+The pattern is consistent. Eval scores look great at launch. Three to six months later, user satisfaction metrics start dropping. You re-run the eval: it still shows 88% retrieval@5. Users are complaining. The eval is not lying — but it is no longer measuring what is happening in production.
+
+Four distinct drift mechanisms:
+
+**Query distribution drift.** Users started asking different questions than your eval set captures. Your eval set was built from the first three months of user queries; it reflects early adopter behavior. Six months later, the product has new users with different vocabularies, new use cases, and questions about features that did not exist when the eval set was constructed. Retrieval that was tuned for your original queries is suboptimal for the new distribution.
+
+**Corpus drift.** New documents were added to the knowledge base without re-indexing, so the vector index does not know about them — queries that should hit the new content fall back to outdated documents. Or: stale documents were not retired, so the retriever surfaces correct-looking but outdated answers. Corpus drift is the most common cause of the "eval says 88%, users say 70%" gap, because the eval set was built against the original corpus and still evaluates against the original corpus — while production users are asking about the new content that neither the eval nor the retriever knows about.
+
+**Embedding model drift.** Your embedding API provider silently updated their model. This is more common than it should be — providers update models without major version bumps, and the embedding space shifts slightly. The chunks in your vector index were embedded under the old model; incoming queries are now embedded under the new model. The cosine similarity scores are no longer comparable. Retrieval quality degrades in ways that look like random noise. Mitigation: pin embedding model versions in your API calls (`text-embedding-3-small` is a named version in the OpenAI API, not a floating alias; use the explicit version string). Re-embed your corpus when you intentionally upgrade.
+
+**Retrieval quality regression.** A recent code change — maybe a chunk size parameter, a top-K value, a BM25 field weight — reduced recall@5 by 4 percentage points. The eval would catch this if you ran it continuously and tracked the trend, but if eval is only run manually before deploys, a regression that slipped through one deploy may not be detected until the business metric drops enough to trigger an investigation.
+
+How to detect drift before it becomes a user satisfaction crisis:
+
+- **Nightly eval runs** against your golden set. Alert on retrieval@5 drop greater than 2 percentage points or faithfulness drop greater than 3 percentage points from the 30-day moving average.
+- **Per-deploy eval gates** using a shorter eval set (~20 queries) that runs as part of the CI pipeline and blocks merge on regression.
+- **Daily production sampling:** sample 1% of production traces, run them through an LLM-as-judge faithfulness scoring prompt (from chapter 7), and track the distribution over time. This catches query distribution drift that the static eval set misses.
+- **Weekly query distribution statistics:** track token length distribution, intent-classifier bucket counts, and vocabulary overlap between production queries and the eval set. A shift in any of these signals that your eval is diverging from production reality.
+- **Quarterly corpus refresh + failure mode review:** re-examine the trending failure categories from production traces, update the eval set to include them, and re-index any content that has been updated since the last full re-embed.
+
+The drift detection apparatus is not glamorous, but it is the difference between a RAG product that improves over time and one that quietly degrades until someone notices the support escalation rate has doubled.
+
+## In practice
+
+The previous sections gave you the mechanism. This one tells you what working engineers actually do, what real production numbers look like, and where the textbook story silently fails when it meets real traffic.
+
+### Where the latency actually goes (numbers)
+
+A representative production RAG p50 latency breakdown, non-agentic, with hybrid search and reranking:
+
+| Stage | p50 latency |
+|---|---|
+| Query embedding (network to cloud endpoint) | 40–80ms |
+| Dense vector search (HNSW index, cloud-hosted) | 20–60ms |
+| BM25 retrieval (Elasticsearch / OpenSearch) | 20–50ms |
+| RRF merge (in-process) | 2–8ms |
+| Cross-encoder rerank (Cohere or self-hosted GPU) | 100–200ms |
+| LLM generation — streaming first token | 300–800ms |
+| LLM generation — complete response | 1000–3000ms |
+
+For chat UIs, streaming transforms the user experience. The user sees the first token at approximately 600ms — before the full response is ready — which means a 2-second total response time feels like a 600ms response time because the text is visibly arriving. Streaming is not an optimization; it is the standard mode of operation for any user-facing chat interface. Users who do not see streaming will abandon sessions at p50 > 1.5s regardless of how correct the final answer is.
+
+The latency stages where engineers most often find unexpected time: network to the embedding endpoint (not the embedding computation — the round-trip latency), and reranker cold starts on hosted APIs. Under bursty traffic, a warm reranker averages 120ms; a cold start after a quiet period can spike to 600–800ms. This is a common source of p99 latency complaints that does not show up in load tests run under sustained traffic.
+
+### Cache hit rates in real systems
+
+Numbers from systems people actually operate:
+
+- Customer support bots with finite FAQ scope: 40–70% exact-match cache hit rate
+- Internal knowledge bots with repeat users and narrow query space: 15–30%
+- Open-ended chat assistants: 5–15%
+- Semantic cache (threshold 0.95) adds 10–25 percentage points over exact-match on top of these numbers
+- **Cache TTL:** 1 hour for stable product documentation; 5 minutes for status or availability content; no cache for personalized responses
+
+The cache hit rate is not a property of your caching implementation — it is a property of your query distribution. Building a sophisticated semantic cache for an open-ended general-assistant product that has 8% hit rate returns almost nothing. Building a fast, simple exact-match cache for a support bot with 55% hit rate transforms both latency and cost. Measure the hit rate on your actual production traffic before investing engineering time in cache sophistication.
+
+### Cost math you should know cold
+
+Numbers to carry into interviews and architecture discussions:
+
+**Embedding:** OpenAI text-embedding-3-small at $0.02/1M tokens. A 20-token query costs $0.0000004. At 10 QPS, that is $0.35/day. Embedding is not where your cost lives.
+
+**LLM generation:** Claude Sonnet at $3/M input tokens, $15/M output tokens. An 8K-token input (system prompt + retrieved chunks + query) plus 200 output tokens: 8K × $0.000003 + 0.2K × $0.000015 = $0.024 + $0.003 = $0.027 per call. That is the dominant line item.
+
+**At scale:** 10 QPS × 86,400 seconds = 864,000 queries/day. At $0.005/query (well-cached, reranker-only pipeline): $4,320/day, $130K/month. At $0.05/query (light agentic use): $43,200/day, $1.3M/month. At $0.30/query (complex agentic, no routing): $259,200/day — $7.8M/month. Cost is the constraint that makes query routing and caching not optional for agentic systems.
+
+### Observability stack — what people use
+
+The tool landscape as of 2025–2026:
+
+- **LangSmith** — dominant for teams already on LangChain. Per-trace visualization is excellent. Proprietary cloud; data residency concerns for some enterprises.
+- **LangFuse** — open-source alternative to LangSmith. Many teams choose it specifically for self-hosting. Active development; feature parity closing fast.
+- **Helicone** — proxy-based: you point your OpenAI/Anthropic client at Helicone's endpoint and get logging with near-zero code changes. Best for fast initial instrumentation.
+- **Phoenix (Arize)** — open-source, with RAG-specific primitives (chunk-level retrieval traces, retrieval quality metrics). Strong for teams that want deep retrieval visibility without vendor lock-in.
+- **Datadog / NewRelic APM** — best for teams already invested in these platforms. RAG-specific tooling is less mature, but APM integration means traces appear alongside your infrastructure metrics.
+- **OpenTelemetry + custom** — the vendor-neutral foundation that most mature platforms are building on. Higher setup cost, lower long-term switching cost. The OTEL semantic conventions for LLM spans are stabilizing; worth following if you are starting a new observability stack.
+
+Most teams start with Helicone (fast to add) or LangSmith (if already using LangChain), then migrate toward LangFuse or OTEL-based stacks as data residency and customization requirements grow.
+
+### Drift detection mechanics
+
+The operational system that catches drift before users notice:
+
+- **Nightly:** Full eval set re-run (~200–1000 queries). Alert on retrieval@5 drop > 2 percentage points or faithfulness drop > 3 points from 30-day moving average. This catches corpus drift and embedding model updates.
+- **Per-deploy:** Smaller smoke eval (~20 queries, balanced across intent types) runs as a CI step. Blocks merge on regression. Runs in under 2 minutes.
+- **Daily:** 1% random sample of production traces → LLM-as-judge faithfulness scoring → trend line. This is your early warning system for query distribution drift, which the static eval set cannot catch.
+- **Weekly:** Query distribution stats — average input length, intent-classifier bucket distribution, vocabulary overlap with eval set. A shift here means your eval is no longer representative; schedule an eval set refresh.
+- **Quarterly:** Full corpus re-embed if any embedding model versions have changed. Manual review of trending failure modes from production traces. Update eval set to include the top-5 failure categories from the past quarter.
+
+The nightly eval run is the single most important piece of this system. Without it, you will discover regressions through user complaints rather than monitoring.
+
+### The single highest-leverage production trick
+
+Add **per-query cost logging from day one.** Every trace records: total LLM calls, total input tokens, total output tokens, retrieval calls, computed cost (input_tokens × price + output_tokens × price). Store this alongside the trace.
+
+Without it, you discover you are losing money on agentic queries from your monthly cloud bill — which tells you there is a problem but not which queries, which users, or which pipeline path caused it.
+
+With it, you see within 24 hours of shipping a new feature that 1% of queries are consuming 30% of your inference budget. You pull the traces for those queries, and you find that a new intent classifier is routing a specific query pattern into the agent loop when vanilla RAG handles it correctly. You fix the routing. You just saved $40K/month. This is not a hypothetical scenario — it is the operational loop that cost-conscious teams run in their first production week.
+
+### The failure mode you will see in production
+
+> "Latency is fine on average, but our p99 is terrible — and every user complaint is about a slow response, never about an average response."
+
+p99 latency outliers are where user experience is destroyed and where most engineering teams spend insufficient time. The causes cluster into four categories:
+
+**(a) Agent loops hitting step limits.** An agent that runs 15 steps before timing out at the step limit accumulates 15 × 1.5s of LLM latency — 22.5 seconds — before the user gets any response. If your step limit is too high and the fallback is a timeout rather than a partial answer, this becomes a 22-second blank screen.
+
+**(b) Reranker latency spikes.** Hosted reranker APIs (Cohere, etc.) queue under traffic bursts. A cold-start cold-queue scenario can push reranker latency from 120ms to 800ms. If you are not tracking per-stage latency separately, this appears as a generic "slow response" with no obvious cause.
+
+**(c) Large chunks blowing LLM context.** A query that retrieves unusually large chunks (PDF tables, code files) fills the LLM context window. The LLM either truncates the context silently (wrong answer) or the API returns an error that your retry logic handles by re-requesting — adding 800–1500ms of additional latency.
+
+**(d) Cache invalidation spikes after deploys.** When a deploy clears the cache (either deliberately or as a side effect), the first few minutes of traffic all miss the cache and hit the full pipeline simultaneously. At 10 QPS with a warm cache serving 50% of requests, a cache flush suddenly routes 100% of traffic to the full pipeline — doubling effective load and spiking p99 latency until the cache warms up again.
+
+Mitigation: track p50, p95, and p99 separately in your observability platform. Set alerts on p99 drift, not just p50. When a p99 alert fires, pull a 30-minute sample of the outlier traces, sort by per-query latency descending, and read the top 10. The cause will be visible in the per-stage latency breakdown.
+
+### Where production concerns fit in the bigger system
+
+Everything covered in chapters 1–8 — chunking, embeddings, retrieval, reranking, evals, hybrid search, GraphRAG, agentic loops — lives inside one box:
+
+```
+request → [trace ID created] → [pipeline stages, instrumented] →
+  [response with token / cost metadata] → [stream metric to obs platform] →
+  [periodic: eval runs + drift detection + alert routing]
+```
+
+The "pipeline stages" box is where retrieval quality, latency, and answer correctness live. This chapter covers the wrapping: what makes those stages observable, billable, debuggable, and durable in front of real users.
+
+The pipeline without the wrapping is a demo. The wrapping without a sound pipeline is expensive noise. A production RAG system is both, and the operational work that connects them — tracing, cost attribution, drift detection, cache management, latency budgeting — is what separates a system that improves over time from one that quietly degrades while the engineering team ships new features.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and system design reviews. They are scenario-based: you are given a specific situation, constraints, and must reason from principles. There is no single right answer — what is evaluated is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="cost-management"
+  question="**Cost vs quality.** Your CFO sees the AI infra line item — $400K/month and growing. She asks you to cut it 30% without losing user-facing functionality. Walk through your top three moves, with expected percentage cost impact for each. Be specific: name the change, the mechanism by which it reduces cost, and the quality tradeoff, if any."
+/>
+
+<RecallPrompt
+  concept="latency-budgets"
+  question="**Production debug.** Your RAG support bot p50 latency is 1.2s — within SLO. p99 is 8.5s — terrible. All customer complaints cite 'it's slow.' Diagnose: how would you find the p99 outlier traces, what are the three most likely causes in order of probability for this specific latency profile, and what is the first concrete fix you would ship?"
+/>
+
+<RecallPrompt
+  concept="rag-caching"
+  question="**Design choice.** You are designing the caching strategy for a new RAG product. Daily query volume: 500K queries, mostly customer-support questions about a bounded set of product topics. Walk through which of the three cache layers you would implement first, in what order, and what TTL you would use. Justify with expected hit rates and explain the risk of each layer."
+/>
+
+<RecallPrompt
+  concept="retrieval-drift"
+  question="**Failure-mode trace.** Your retrieval@5 has been stable at 88% on eval for six months. User satisfaction dropped 12% last month. You re-run the eval today: still 88%. What is the most likely explanation for the gap between eval and production, and what specific diagnostic would you run in the next 24 hours to confirm or rule out each hypothesis?"
+/>
+
+<RecallPrompt
+  concept="rag-observability"
+  question="**Senior eng pushback.** A junior engineer proposes 'let's just add comprehensive logging — log every retrieved chunk, every LLM input and output, every score, to Datadog.' Push back. What is the right minimum-viable observability surface for a v1 RAG system, what does it cost to operate at 10 QPS, and how do you iterate toward comprehensive observability without incurring the full cost from day one?"
+/>

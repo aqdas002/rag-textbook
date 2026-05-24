@@ -1,0 +1,291 @@
+---
+id: retrieval
+title: Retrieval
+estimatedMinutes: 25
+concepts: [top-k-retrieval, relevance-diversity-tradeoff, mmr]
+prerequisites: [cosine-similarity, chunk-retrieval-impact]
+---
+
+import { TopKRetriever } from '@sims/TopKRetriever'
+import { MMRRetriever } from '@sims/MMRRetriever'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## The top-K primitive
+
+You've embedded your chunks and stored them in a vector index. A query arrives. Now what?
+
+The answer is almost always some version of the same thing: **rank every chunk by its similarity to the query, then take the K highest-ranked ones.** That's top-K retrieval. Everything else in this chapter is a variation on or reaction to this primitive.
+
+The similarity function is typically cosine similarity — the same measure from the Embeddings chapter. The query is embedded using the same model as the corpus, giving it a point in the same vector space. Then you compute the angle between the query vector and every document vector. The K chunks with the smallest angles (highest cosine similarity) win.
+
+A few things this approach gets right: it's fast with an approximate nearest-neighbor index, it generalizes across query types, and the score is interpretable — you always have a number you can inspect. What it gets wrong comes next.
+
+## Watching top-K work
+
+Before running the sim, think about what you'd expect.
+
+<PredictGate
+  concept="top-k-retrieval"
+  question="What do you expect to happen as you increase K from 1 to 6? At what point do you think the retrieved results stop being useful for a query about Paris?"
+  hint="There are 8 documents in the corpus. Some are Paris-related, others are not. Think about what the 4th and 5th most similar documents to 'Tell me about Paris.' might be."
+>
+  <TopKRetriever initialK={3} />
+</PredictGate>
+
+At K=1 or K=2, the retrieved set is tight: just the documents that clearly mention Paris or France. At K=4 or K=5, documents about Tokyo, sushi, or programming languages start slipping in. Their similarity scores are non-zero — the word "the" appears in every document, which creates a small baseline similarity even for completely off-topic chunks.
+
+This is the precision-recall tradeoff in its most naked form. **Small K gives you high precision but risks missing something relevant.** If a query needs two pieces of information and you only fetch one, your LLM can't synthesize an answer from what it never saw. **Large K gives you more recall but introduces noise.** A 4096-token context window fills up fast; chunks that don't belong push out chunks that do.
+
+The right K is not 3 or 5 or 10. It depends on your query distribution, your chunk size, and how densely your corpus covers the topic. Measure on real queries.
+
+(Note: this sim uses toy bag-of-words cosine similarity, not real embeddings. Real embeddings would push the Paris/Eiffel/Louvre documents closer together and Tokyo/Python further apart, making the cutoff cleaner — but the shape of the problem is the same.)
+
+## The redundancy problem
+
+Top-K assumes that the K most similar documents are the K most *useful* documents. That assumption breaks down as soon as your corpus contains near-duplicate content.
+
+Imagine a knowledge base about a product where the same FAQ answer appears verbatim in three places: the main FAQ page, a troubleshooting guide, and a getting-started document. A user asks a question that matches that FAQ. Under pure top-K retrieval, your K=3 result set is three copies of the same answer. You've used your entire retrieval budget on one piece of information.
+
+This isn't hypothetical. It happens whenever you have:
+
+- Product documentation with version-specific copies of the same page
+- News articles reporting the same event with slight paraphrasing
+- Customer support corpora where the same resolution is pasted into multiple tickets
+- Any corpus that grew organically and was never deduplicated
+
+The result is that your LLM sees K copies of fact A and zero copies of facts B, C, and D — even though B, C, and D might be exactly what completes the answer. **Pure relevance ranking can silently waste your retrieval budget on redundancy.**
+
+## MMR — relevance vs diversity
+
+Maximal Marginal Relevance (MMR) is a greedy algorithm that reranks documents to balance relevance against redundancy. The score for each candidate document at each selection step is:
+
+```
+MMR_score = λ · sim(doc, query) − (1 − λ) · max_{selected} sim(doc, selected_doc)
+```
+
+The first term rewards relevance to the query. The second term penalizes similarity to documents you've already selected. Lambda (λ) controls the balance: λ=1 reduces MMR to vanilla top-K; λ=0 selects the most diverse set possible regardless of relevance.
+
+Before running the sim, think about what λ=1 should produce.
+
+<PredictGate
+  concept="mmr"
+  question="If you set λ = 1.0, MMR ignores the redundancy penalty entirely. What do you expect its results to look like compared to vanilla top-K?"
+  hint="Look at the MMR formula. When λ = 1, the second term vanishes completely. What's left?"
+>
+  <MMRRetriever initialLambda={0.5} />
+</PredictGate>
+
+At λ=1, MMR and vanilla top-K select identical documents — confirming the formula works as described. As you drag λ toward 0, documents diverge: MMR starts swapping in lower-relevance-but-different documents to avoid repetition.
+
+The interesting region is the middle. At λ=0.5, MMR balances relevance and diversity. For this toy corpus and query, it may swap the third Paris-adjacent document for something topically distinct — say, a document about Tokyo — because the redundancy penalty outweighs the marginal relevance gain.
+
+**Lambda is a hyperparameter, not a constant.** The right value depends on your use case:
+
+- Queries that need confirmation ("Is the capital of France Paris?") benefit from high lambda — you want the most relevant result, not variety.
+- Queries that need breadth ("What should I know about Paris?") benefit from lower lambda — you want distinct angles, not three restatements of the same fact.
+- Factoid QA systems often stay near λ=0.7–0.9. Research summarization pipelines often drop to λ=0.4–0.6.
+
+Like chunk size, lambda is something you tune against real query logs, not something you set once and forget.
+
+## In practice
+
+The previous sections gave you the mechanism. This one tells you what working
+engineers actually ship, what numbers real systems run with, and where the
+textbook story quietly fails in production.
+
+### What K do real systems use?
+
+The most common choices are **K=3 to K=10** when retrieved chunks go directly
+into the LLM prompt, and **K=20 to K=50** when a reranker follows retrieval
+as a second stage.
+
+The logic is straightforward: small K maximizes precision when there's no
+second stage to clean things up; larger K with reranking trades initial recall
+for downstream precision, letting the reranker do what top-K cosine similarity
+cannot. Pinecone, Weaviate, and Chroma all expose default K in the 5–10 range
+in their getting-started documentation — a reasonable starting point, not a
+universal answer.
+
+If you don't have a reranker, start at K=5 and tune against real queries.
+If you do have a reranker, start at K=20–30 and let the reranker cut it back
+to 5.
+
+### Hybrid search — the next chapter, but mention it now
+
+Pure dense retrieval fails predictably on a class of queries: **rare terms,
+exact phrases, and specific identifiers** — product SKUs, error codes, version
+numbers, medical codes, legal citation numbers. An embedding model trained on
+broad text has no special representation for `ERR_CONNECTION_TIMED_OUT` or
+`CVE-2024-12345`; it smears the meaning across neighboring tokens and loses
+precision.
+
+The fix is **hybrid search**: combine BM25 keyword retrieval with dense
+vector retrieval, then merge the ranked lists via reciprocal rank fusion (RRF)
+or a weighted score. RRF is the common default because it requires no tuning;
+it simply computes `1/(rank + 60)` for each document in each list and sums.
+
+A Pinecone study found hybrid wins on roughly **30% of queries that pure dense
+retrieval loses** — specifically the identifier-heavy and rare-term queries.
+The next chapter covers hybrid search in full. For now, file it as: "dense
+retrieval is a starting point, not a production ceiling."
+
+### Reranking — the most important thing coming up
+
+A **cross-encoder reranker** takes your initial top-N candidates and re-scores
+each `(query, document)` pair using full attention — both query and document
+visible to the model simultaneously, as opposed to the separate embeddings used
+for cosine similarity. This catches relevance that pure similarity misses.
+
+The production options as of 2025:
+
+- **Cohere `rerank-v3`**: the most widely deployed, available as an API.
+  ~$2 per 1,000 reranks.
+- **BAAI `bge-reranker-v2-m3`**: strong open-weight option, self-hostable.
+- **Voyage `rerank-2`**: competitive on domain-specific corpora.
+
+Typical performance characteristics for top-20 reranking:
+- Latency: **50–200ms** depending on model size and whether it's self-hosted
+- Quality lift: **10–20% on nDCG@5 or recall@3** versus the same dense
+  retrieval without reranking
+
+This is the highest-leverage RAG upgrade in the 2024–2026 window. Walk into
+any senior AI engineering interview knowing it cold.
+
+### MMR in practice
+
+Less commonly used than the textbook attention suggests. Most production RAG
+systems take one of three paths instead of MMR:
+
+1. **Skip MMR entirely** and use a reranker — the reranker's cross-attention
+   already accounts for relevance in a way that makes diversity less critical.
+2. **Deduplicate at index time** — run near-duplicate detection before
+   indexing and remove copies. This solves the redundancy problem at its root
+   rather than at query time.
+3. **Apply MMR only for synthesis-style queries** — research summarization,
+   multi-document QA, competitive analysis. For factoid retrieval ("What is
+   the return window?"), MMR adds latency without helping.
+
+When MMR is used, production lambda values cluster at **λ=0.7–0.9** —
+heavily relevance-weighted. A default of λ=0.5 (equal weight to relevance
+and diversity) is a reasonable simulation setting but aggressive for most
+real workloads.
+
+### Latency budget
+
+A typical production RAG retrieval call, broken down:
+
+| Step | Typical latency |
+|---|---|
+| Dense retrieval (HNSW index, &lt;10M vectors) | 20–80ms |
+| Dense retrieval (IVF index, &gt;100M vectors) | 30–150ms |
+| Cross-encoder reranker, top-20 | 50–200ms |
+| MMR (if used) | 1–10ms |
+| **End-to-end p50 retrieval** | **50–300ms** |
+
+Anything above ~300ms p50 starts to register as latency in user-facing
+applications. If you're over budget, the levers are: (a) reduce reranker
+top-N, (b) switch to a smaller/self-hosted reranker, (c) reduce dense
+index size with better chunking or filtering, (d) skip reranking on low-stakes
+queries and only pay for it on high-value sessions.
+
+### The single highest-leverage retrieval trick
+
+**BM25 + dense → top-30 → cross-encoder rerank → top-5.**
+
+Pure dense retrieval with cosine similarity is a starting point. The
+production winning configuration for most corpora is:
+
+```
+query → [BM25 keyword retrieval] + [dense embedding retrieval]
+      → [reciprocal rank fusion, top-30]
+      → [cross-encoder rerank]
+      → [top-5 to LLM context]
+```
+
+Hybrid search recovers ~30% of queries that pure cosine-sim misses (the
+identifier/exact-phrase queries). The reranker recovers another 10–20% on
+top of that. The cost is the reranker latency (50–200ms) and per-call fee
+(~$2 per 1K). For most production workloads, the quality delta justifies both.
+
+### The failure mode you will see in production
+
+> "Retrieval@5 is 92% in offline eval. User satisfaction is poor. What's wrong?"
+
+This is one of the most common production RAG surprises, and it has three
+distinct root causes:
+
+**Root cause A: eval set doesn't match production query distribution.** Your
+eval queries were written by someone who knew the documentation. Production
+users write "why doesn't my login work" not "explain the authentication
+troubleshooting procedure." The distribution shift means your 92% eval number
+doesn't reflect production precision.
+
+**Root cause B: the right chunks are retrieved but ranked too low.** Retrieval@5
+measures whether the relevant chunk appears *anywhere* in the top-5. But LLMs
+are not equally attentive to all positions in their context window. If the
+relevant chunk is ranked 5th in a 5-chunk context, many models under-weight it
+relative to chunks 1 and 2.
+
+**Root cause C: chunk-rank-position bias.** LLMs preferentially use the first
+chunk in the context window regardless of relevance. This is well-documented
+empirically (the "lost in the middle" finding from Liu et al. 2023). A reranker
+puts the most relevant chunk first; without one, you're hoping your cosine-sim
+ranking happens to match what the LLM will attend to.
+
+The fix for A is to measure on real production query logs or use an LLM to
+generate adversarial queries from the documentation. The fix for B and C is
+a reranker — it both improves rank quality and lets you put the best chunk
+first in the context.
+
+### Where retrieval fits in the bigger system
+
+A production RAG retrieval pipeline, end to end:
+
+```
+query → [optional: query rewrite] → [embed query]
+      → [BM25 + dense retrieval]
+      → [merge / reciprocal rank fusion]
+      → [top-30]
+      → [cross-encoder rerank]
+      → [top-5]
+      → [optional: MMR for diversity]
+      → [pass to LLM context]
+```
+
+The next chapter — Reranking and Hybrid Search — covers BM25, RRF, and
+cross-encoders in full. This chapter's job was to give you the primitives
+(top-K and MMR) and enough production context to know where they fit.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering
+interviews and design reviews. They're scenario-based: you're given a
+specific situation, constraints, and have to reason from principles. There
+is no single right answer to most — what's graded is whether you identify
+the right tradeoffs, propose specific (not generic) actions, and flag
+failure modes.
+
+<RecallPrompt
+  concept="top-k-retrieval"
+  question="**Production debug.** Your team's RAG-powered support bot scores retrieval@5 = 92% in offline eval, but user satisfaction surveys show 40% of answers are rated unhelpful. You pull a sample of 50 failed conversations and notice the retrieved chunks look correct to you. Diagnose what's going wrong. What are the three most likely root causes, and what is the first concrete thing you'd instrument or change in the pipeline to isolate which one it is?"
+/>
+
+<RecallPrompt
+  concept="relevance-diversity-tradeoff"
+  question="**Design choice.** A teammate proposes 'just increase K to 20 and let the LLM filter out irrelevant chunks — it's smarter than our retriever anyway.' Your context window is 8K tokens, your average chunk is 300 tokens, and your current K=5. Walk through the specific problems this creates: (a) what happens to your context budget, (b) what does the LLM actually do when given 20 chunks of mixed relevance, and (c) what's the correct production alternative to 'large K and hope'?"
+/>
+
+<RecallPrompt
+  concept="cosine-similarity"
+  question="**Cost vs quality.** Your latency budget for the retrieval stage is 100ms p50. You've measured: dense retrieval at 80ms, cross-encoder reranker at 150ms. You're 130ms over budget. Walk through at least three specific moves you can make, with the expected latency and quality tradeoff of each. Which would you try first, and why?"
+/>
+
+<RecallPrompt
+  concept="mmr"
+  question="**Failure-mode trace.** MMR has been running in your production system for two years with λ=0.5. A new team member asks whether it's actually helping and suggests turning it off. Walk through the experiment you'd run to find out: what's your control, what's your treatment, what metric do you measure, what query types would you expect to see the biggest delta on, and under what result would you remove it?"
+/>
+
+<RecallPrompt
+  concept="chunk-retrieval-impact"
+  question="**Senior eng pushback.** A new colleague asks why your team's production system uses BM25 alongside dense retrieval — 'embeddings are obviously better, BM25 is from 1994.' Give your answer. Include: what class of queries dense retrieval fails on that BM25 handles, how reciprocal rank fusion merges the two lists, a concrete example of a query from your domain where this matters, and what the Pinecone hybrid study found."
+/>

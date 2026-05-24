@@ -1,0 +1,280 @@
+---
+id: graph-rag
+title: GraphRAG
+estimatedMinutes: 30
+concepts: [knowledge-graph, multi-hop-questions, entity-extraction, graph-traversal-retrieval, community-detection]
+prerequisites: [top-k-retrieval, hybrid-search]
+---
+
+import { MultiHopRetrieval } from '@sims/MultiHopRetrieval'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## Where vanilla RAG breaks
+
+The previous chapter closed with a measurement system: you now know how to tell whether retrieval is working. This chapter asks a different question — what do you do when retrieval works perfectly, chunk by chunk, and still fails to answer the question?
+
+Consider this query:
+
+> "What did the CEO of the company that acquired Instagram in 2012 say at the most recent earnings call?"
+
+Walk through what a vanilla RAG system does with this. It embeds the query, finds the top-5 most similar chunks in the corpus, and hands them to the LLM. The chunks it finds are probably something like:
+
+- "Instagram was acquired by Meta in 2012 for $1 billion."
+- "Mark Zuckerberg is the CEO of Meta."
+- "At the Q3 2024 earnings call, Mark Zuckerberg said AI capital expenditure will exceed $40B this year."
+- "Meta is a social media and technology company."
+- "Instagram is a photo and video sharing platform owned by Meta."
+
+Five facts. All correct. All retrieved. And yet a significant fraction of LLMs will fail to assemble a confident, accurate answer from this list — because no single chunk contains the full chain. The answer requires the LLM to reason: Instagram was acquired by Meta → Meta's CEO is Zuckerberg → Zuckerberg spoke at Q3 2024 earnings → he said X. Each step in that chain lives in a separate, disconnected fragment.
+
+This is the **multi-hop problem**: questions whose answers require chaining two or more facts that live in separate documents, where no single chunk contains the full chain. Vanilla retrieval is built on a fundamental assumption — that the answer to a query lives, mostly intact, inside one (or a small handful of) retrieved chunk(s). Multi-hop questions violate that assumption structurally.
+
+The LLM receiving those five disconnected chunks is not failing because it is dumb. It is failing because it was handed a puzzle with the pieces out of order and asked to assemble it without being told which pieces connect to which. The context window contains the right information but not the right *structure*.
+
+This is the problem GraphRAG was built to solve.
+
+## What is a knowledge graph?
+
+A knowledge graph is a representation of information as a network of **entities** (nodes) and **relationships** (labeled directed edges between nodes).
+
+An entity is anything meaningful enough to be named: a person, a company, a product, a regulation, a drug, an event. A relationship is a typed, directed connection between two entities: `Mark Zuckerberg → ceo_of → Meta`, `Meta → acquired → Instagram`, `Instagram → acquired_in → 2012`.
+
+This is fundamentally different from a flat document collection in a way that matters for retrieval. In a document corpus, the connection between "Instagram" and "Mark Zuckerberg" is *implicit* — it exists somewhere in the text but has no formal representation. You can find it by reading the documents, but your retrieval system cannot find it by traversing a structure, because there is no structure. In a knowledge graph, the connection is *explicit*: a labeled directed edge that a query engine can follow in milliseconds.
+
+A few concrete examples to make the abstraction tangible:
+
+- **Organizational graphs.** Entities: `Person`, `Team`, `Department`, `Project`. Relationships: `reports_to`, `member_of`, `owns`, `depends_on`. A query like "which teams are blocked by the platform migration?" becomes a graph traversal, not a keyword search.
+- **Biomedical interaction graphs.** Entities: `Drug`, `Gene`, `Protein`, `Disease`. Relationships: `interacts_with`, `inhibits`, `associated_with`, `treats`. Querying "which drugs interact with genes associated with BRCA2?" is a two-hop traversal that would require combining hundreds of separate research papers in a flat corpus.
+- **E-commerce product graphs.** Entities: `Product`, `Brand`, `Category`, `Attribute`. Relationships: `belongs_to`, `compatible_with`, `variant_of`. Answering "show me waterproof Patagonia backpacks under 30L" is a multi-constraint traversal over entity attributes.
+
+In each case, the knowledge graph does not just store the facts — it stores the *connections* between facts. That is the capability that makes it fundamentally different from a collection of embeddings. Embeddings capture semantic similarity; graphs capture explicit relational structure.
+
+One important clarification: "knowledge graph" does not mean "a graph built from vector embeddings" or "HNSW graph used for approximate nearest-neighbor search." Those are proximity graphs used to accelerate vector lookup — an implementation detail of vector databases. A knowledge graph is a semantic structure where edges represent typed relationships with domain meaning. They are different concepts that happen to both use the word "graph."
+
+## Retrieval as traversal
+
+Given a knowledge graph, retrieval works differently from nearest-neighbor lookup. Instead of "find the K vectors closest to this query vector," the operation is:
+
+1. **Identify entities mentioned in the query.** The query "who runs the company that owns Instagram?" contains the entity `Instagram`.
+2. **Locate those entities as nodes in the graph.** Find the `Instagram` node.
+3. **Walk outgoing (and incoming) edges to neighboring nodes.** From `Instagram`, follow the `acquired (reverse → owner)` edge to reach `Meta`. From `Meta`, follow the `ceo_of (reverse)` edge to reach `Mark Zuckerberg`.
+4. **Filter by edge types relevant to the query intent.** The query asks "who runs" — so traverse ownership and leadership edges, not product or funding edges.
+5. **Assemble the traversed subgraph as retrieved context.** The path `Instagram → Meta → Mark Zuckerberg` becomes the context handed to the LLM, along with the facts at each node.
+
+This is graph traversal. It is a fundamentally different retrieval operation from nearest-neighbor search. The key difference: nearest-neighbor search finds chunks that are *similar* to the query. Graph traversal *follows explicit connections* from query entities to the answer. The answer does not need to be lexically or semantically close to the query — it needs to be *reachable* from the query's entities.
+
+Before you interact with the simulation below, make a prediction.
+
+<PredictGate
+  concept="graph-traversal-retrieval"
+  question="The sim has three queries: (1-hop) 'Who is the CEO of Meta?', (2-hop) 'Who runs the company that owns Instagram?', and (3-hop) 'What did the leader of the company that acquired Instagram in 2012 say at their most recent earnings call?' Before interacting: which of these three queries do you predict vanilla RAG can answer correctly, and which will it fail on? Explain your reasoning in terms of what each retrieval mode needs from the corpus."
+  hint="Think about what 'vanilla' cosine similarity retrieval needs — an answer that lives in a single chunk. Now think about what each query actually requires in terms of fact-chaining."
+>
+  <MultiHopRetrieval />
+</PredictGate>
+
+**What the sim reveals.** Select each query in the dropdown and observe both retrieval columns.
+
+**Query 1 — "Who is the CEO of Meta?" (1-hop).** Vanilla RAG answers this correctly. The chunk "Mark Zuckerberg is the CEO of Meta" is the top-ranked result by cosine similarity, because the query keywords overlap directly with that chunk's keywords. GraphRAG confirms this via a one-edge traversal: `Meta → ceo_of (reverse) → Mark Zuckerberg`. For single-hop questions whose answers live in a single chunk, vanilla RAG works perfectly. GraphRAG adds no meaningful value here.
+
+**Query 2 — "Who runs the company that owns Instagram?" (2-hop).** Vanilla RAG fails. The top-5 chunks include "Instagram was acquired by Meta" and "Mark Zuckerberg is the CEO of Meta" — both individually correct and both present in the retrieved context. But the critical link — that the company which owns Instagram is Meta, and Meta's CEO is Zuckerberg — must be assembled by the LLM from two disconnected chunks. Many LLMs will succeed at this with very simple questions, but production experience shows this reliability degrades quickly as the chain gets longer or the vocabulary becomes more technical. GraphRAG traverses two edges and returns the answer chain: `Instagram → Meta (owner) → Mark Zuckerberg (CEO)`.
+
+**Query 3 — "What did the leader of the company that acquired Instagram in 2012 say at their most recent earnings call?" (3-hop).** Vanilla RAG fails reliably. Five isolated chunks each contain one atomic fact. None of them contains a sentence that begins with "the leader of the company that acquired Instagram said..." No chunk is the answer; the answer is a *path through* the facts. GraphRAG traverses: `Instagram → Meta (acquired 2012) → Mark Zuckerberg (CEO) → Q3 2024 Earnings Call (spoke_at)` and returns: "AI capital expenditure will exceed $40B this year."
+
+The pattern generalizes: single-hop questions with direct factoid answers in the corpus — vanilla RAG wins (or ties). Two-hop and beyond — graph traversal becomes necessary.
+
+## Building the graph: entity extraction
+
+The previous section assumed you have a knowledge graph to traverse. In practice, for most corpora, you do not. Company wikis, regulatory PDFs, research paper archives, support ticket databases — none of these come pre-packaged as a graph. You have to build one.
+
+The process is called **entity and relationship extraction**, and it has three main approaches:
+
+**Traditional NLP pipeline.** Named entity recognition (NER) identifies entities in text (people, organizations, locations, dates). A separate relationship extraction model classifies the relationship between pairs of detected entities within a sentence or paragraph. This approach is fast and cheap at inference time, but NER models have fixed entity type inventories, and relationship extraction models require training data for each relationship type you care about. For general-purpose corpora with novel relationship types, coverage is poor.
+
+**LLM-based triple extraction.** Prompt a capable LLM to read each chunk and output `(entity, relationship, entity)` triples. Example prompt: "Extract all entities and their relationships from the following text. Output one triple per line in the format: EntityA | relationship_type | EntityB." The LLM handles arbitrary entity types and relationship types without retraining. Quality is high on well-structured text. Cost is one LLM call per chunk — roughly 1-2x the cost of embedding the corpus (since embedding is a cheap inference call and LLM extraction requires a full generation pass per chunk).
+
+**Domain-specific schema.** For domains with known structure, define the graph schema upfront: entity types you care about, relationship types that matter for your queries. A pharmaceutical company might define `Drug`, `Target`, `ClinicalTrial`, `Indication` as entity types and `inhibits`, `binds_to`, `treats`, `contraindicated_with` as relationship types. Extraction is then a classification task rather than an open-ended generation task — the LLM (or fine-tuned model) fills in slots rather than inventing structure. This is harder to set up but produces far more consistent, queryable graphs.
+
+**Microsoft's GraphRAG approach (2024).** The most cited recent implementation uses GPT-4 to extract entities and relationships from each chunk in a two-pass pipeline: a broad extraction pass followed by a "gleaning" pass that asks the LLM "did you miss any entities or relationships?" to improve coverage. Entities and relationships extracted from different chunks are then merged across the corpus using string similarity and LLM-guided deduplication. This pipeline runs once at index time. The cost for a 100,000-document corpus is roughly $200–500 in LLM extraction calls (depending on model choice and chunk size), compared to $20–50 for embedding alone.
+
+**Quality depends heavily on extraction prompt design and model capability.** GPT-4-class models extract clean, consistent triples from structured text (product documentation, regulatory filings, scientific papers). They perform worse on conversational text, colloquial phrasing, implicit relationships, and domains with highly specialized vocabulary where the model lacks training coverage. The extraction quality is the ceiling on retrieval quality — garbage in, garbage out applies more severely here than in vanilla RAG, because graph queries rely on exact entity and relationship type matching.
+
+This step is the expensive, time-consuming, one-time investment that makes GraphRAG a deliberate architectural choice rather than a drop-in replacement.
+
+## Microsoft GraphRAG and community detection
+
+Microsoft's 2024 paper, "From Local to Global: A Graph RAG Approach to Query-Focused Summarization," is the most cited contribution to GraphRAG in the past two years. What it introduced was not graph traversal — Neo4j has supported graph traversal queries for over a decade. The novel contribution was applying **graph community detection** to the problem of large-corpus summarization.
+
+The insight: after you extract a knowledge graph from a large corpus, the graph is not a uniform structure. It has clusters — dense regions where entities are highly interconnected — separated by sparse regions. A corpus of SEC filings will cluster around individual companies, their subsidiaries, their executives, their products. A corpus of biomedical literature will cluster around disease pathways, drug classes, protein families. These clusters correspond to coherent semantic communities that are discoverable without reading every document.
+
+Microsoft's approach:
+
+1. Extract entities and relationships from the full corpus using LLM-based triple extraction.
+2. Apply the **Leiden algorithm** (a graph community detection algorithm) to find clusters of densely-connected entities. The algorithm is hierarchical — you get coarse communities at the top level and finer-grained sub-communities at lower levels.
+3. For each community, prompt an LLM to generate a **community report**: a summary of what that cluster of entities represents, what relationships connect them, and what themes emerge. A community of tech companies, their products, and their executives gets a summary like "this cluster covers Meta's product ecosystem and leadership structure as of 2024."
+4. At query time, retrieve relevant community reports (via vector similarity on the summaries) and pass them to the LLM as context.
+
+This approach handles queries that require **synthesis across many documents** — not just "what did Zuckerberg say?" but "what are the dominant themes in Meta's last four earnings calls, and how do they compare to competitor communications?" That kind of global synthesis question is where community-level summaries shine. No single chunk, and no single traversal path, can answer it. But a well-constructed community report can.
+
+The GitHub repository released alongside the paper demonstrates this on Charles Dickens's *A Christmas Carol* and on a corpus of political news documents — two corpora where the interesting questions are thematic and comparative rather than factoid. The results show substantially better answer quality for global synthesis queries compared to vanilla RAG. For local factoid queries, the gap shrinks or disappears.
+
+The cost tradeoff is real: community report generation requires one LLM call per community, and for large corpora with many communities, this can add significant cost. The paper reports running their full pipeline on the Dickens corpus cost roughly $0.50; on the political news corpus, substantially more. At 100K documents, budget $100–400 for community reports on top of extraction costs.
+
+## In practice
+
+### When to use GraphRAG
+
+GraphRAG is the right choice when your query distribution contains questions that require chaining facts across documents, and when your corpus has rich relational structure worth explicitly encoding.
+
+**Good fits:**
+- **Multi-hop questions.** Any question whose answer requires combining facts from two or more separate sources: "which policies does GDPR Article 17 affect that were also changed in last quarter's audit?" "which drugs in our clinical trials interact with compounds approved by competitors last year?"
+- **Relational synthesis.** "Show me all decisions made by the platform team that downstream teams reference in their planning docs." Requires finding entities, following relationships, and aggregating results.
+- **Regulatory compliance and legal.** These domains are built on cross-references. Regulations cite other regulations; contracts reference other contracts; audit findings reference control frameworks. The relationship structure is the domain.
+- **Organizational and biomedical knowledge.** Both domains have well-defined entity and relationship types, making schema-constrained extraction effective and graph queries precise.
+- **Global summarization.** "What are the main themes across our entire document corpus?" This is what Microsoft's community detection approach handles. Vanilla RAG is structurally incapable of global synthesis — it can only retrieve local chunks.
+
+**Bad fits:**
+- **Direct factoid Q&A on a small corpus.** If the query is "what is our return policy?" and the answer lives in a single document, vanilla RAG answers it correctly, faster, and cheaper.
+- **Conversational text.** Chat logs, customer support tickets, and social media posts rarely have extractable entities and relationships. Extraction quality will be poor.
+- **Domains with weak relational structure.** If your corpus is a collection of standalone how-to guides with no cross-references, there are no meaningful relationships to extract.
+- **High-velocity corpora.** If your corpus changes daily (news, logs, live databases), the graph extraction cost becomes ongoing rather than one-time. Vanilla RAG handles fresh documents with an embedding call; GraphRAG requires re-extraction and re-merging.
+
+GraphRAG is not a general-purpose upgrade to vanilla RAG. It is a specialized tool for a specific class of problems. Use it when your query distribution demands it.
+
+### The cost reality
+
+The costs break down into three buckets:
+
+**One-time index construction.** This is the dominant cost. For a 100K-document corpus averaging 800 tokens per chunk:
+- Embedding: ~$15–50 depending on model (ada-002 is $0.10/1M tokens; newer models cost more but chunk count is the same)
+- LLM-based entity and relationship extraction: ~$200–500 (one LLM call per chunk at GPT-4 pricing; using GPT-4o-mini cuts this to $20–50 with some quality loss)
+- Community report generation: ~$100–400 depending on community count and depth
+
+Total one-time cost for 100K documents: **$300–1000**, versus ~$50 for embedding-only vanilla RAG. This is the investment you're making for better multi-hop retrieval.
+
+**Ongoing storage.** The graph itself is small. A 100K-document corpus with LLM extraction might produce 50K–200K entity nodes and 100K–500K relationship edges — call it 1–5 GB in a graph database. Negligible compared to a vector store of the same corpus.
+
+**Query-time latency.** Graph traversal is fast when properly indexed — Neo4j handles billions of edges with millisecond-level traversal for bounded-hop queries. Community report retrieval is vector search over summaries, similar to vanilla RAG latency. Total query-time latency is comparable to hybrid retrieval with reranking: 200–800ms in well-tuned production systems.
+
+The one-time construction cost is the gate. If you are building on a corpus that will be relatively stable for months, that cost amortizes quickly. If your corpus turns over weekly, revisit the math.
+
+### Tools and stacks people use
+
+**Microsoft GraphRAG** (open-source Python, 2024, `microsoft/graphrag` on GitHub). Research-quality implementation of the full pipeline: LLM extraction, Leiden community detection, community report generation, query-time retrieval. Excellent for getting started and understanding the full system. Requires careful prompt tuning and is expensive to run at scale. Not yet production-hardened.
+
+**LlamaIndex KnowledgeGraphIndex.** Easier to integrate if you are already using LlamaIndex for your RAG pipeline. Handles entity extraction and graph storage with fewer configuration knobs. Less mature than Microsoft's implementation, with more limited community detection support. Good for teams that want GraphRAG capabilities without building from scratch.
+
+**Neo4j + custom LLM extraction pipeline.** This is what most enterprises actually run in production. Neo4j is a production-grade, battle-tested graph database that has handled graph traversal at scale for over 15 years. You build your own extraction pipeline (LLM calls per chunk, entity resolution, relationship typing) and store the result in Neo4j. Query using Cypher (Neo4j's graph query language). More engineering work than a framework, but full control over extraction quality and no framework constraints. The `neo4j-graphrag-python` library provides LLM integration.
+
+**Memgraph, ArangoDB, AWS Neptune.** Alternative graph databases used in production. Memgraph uses the Cypher query language (compatible with Neo4j skills); ArangoDB is multi-model (document + graph); Neptune is managed on AWS and avoids self-hosting overhead. Choice among these is typically driven by cloud provider, existing infrastructure, and team familiarity.
+
+**NetworkX** for prototypes and toy graphs. Pure Python, no server required, easy to visualize. Not production-grade — does not scale beyond a few hundred thousand nodes without degrading. Good for validating your extraction pipeline before committing to a graph database.
+
+### Hybrid retrieval is the norm
+
+Production GraphRAG systems do not replace vector retrieval — they combine it.
+
+The reason: vector retrieval captures surface-form matches that graph traversal does not. A query for "what did Zuckerberg say about metaverse strategy?" will find chunks containing "Zuckerberg" and "metaverse" via cosine similarity even if the graph has not linked those concepts. Graph traversal finds multi-hop relationship chains that vector retrieval cannot. Each mode has failure cases the other covers.
+
+The typical production architecture runs both in parallel at query time and merges results:
+
+- Vector retrieval returns top-K chunks by similarity
+- Graph traversal returns a subgraph or path from query entities to answer entities
+- Results are merged, deduplicated, and optionally reranked before going to the LLM
+
+This is functionally similar to hybrid BM25 + dense retrieval (covered in the hybrid search chapter) — the principle is the same: different retrieval modes fail differently, and combining them covers more of the query distribution than any single mode alone.
+
+### The single highest-leverage GraphRAG trick
+
+**Schema-constrained extraction.** Do not prompt your LLM to "extract any entities and any relationships" — this produces an inconsistent mess. Different chunks produce different entity type names for the same concept (`Company`, `Corporation`, `Firm`, `Business`). Relationship labels are inconsistent (`acquired`, `bought`, `purchased`, `took over`). Entity resolution becomes intractable when you cannot determine what counts as the "same" entity across documents.
+
+Instead, define a schema before extraction begins:
+
+```
+Entity types: Company, Person, Product, Regulation, Event
+Relationship types: ceo_of, acquired, released, complies_with, spoke_at, founded
+```
+
+Feed this schema to the extraction prompt explicitly. Ask the LLM to classify extracted entities into one of your defined types and extracted relationships into one of your defined relationship types (or flag them as "other" for human review). This makes downstream querying tractable — you can write Cypher queries that say `MATCH (p:Person)-[:ceo_of]->(c:Company)` with confidence that those type labels are consistent. Entity resolution is much easier when you know that `Apple Inc.`, `AAPL`, and `the company in Cupertino` should all resolve to a single `Company` node.
+
+Schema design is the highest-leverage design decision in a GraphRAG system. Get it wrong and the graph is unqueryable. Get it right and traversal queries become simple and reliable.
+
+### The failure mode you will see in production
+
+> "Our graph extraction LLM produced 50,000 entities and 200,000 relationships from 1,000 documents — but production queries return strange results. Searching for 'Apple' returns stock ticker info, company history, and apple-the-fruit recipes as separate, unlinked entities."
+
+This is **entity proliferation caused by missing entity resolution**, and it is the most common serious failure in production GraphRAG systems.
+
+The root cause: your extraction pipeline created a new node for every mention of an entity, without checking whether that entity already exists in the graph. `Apple Inc.`, `Apple`, `AAPL`, `the Cupertino tech giant`, and `apple` (lowercase, in a recipe) are stored as five separate nodes with no links between them. Graph traversal from any one of them finds only the facts connected to that specific node — not the full picture.
+
+Entity resolution is harder than extraction. There is no clean algorithmic solution; it requires a combination of:
+
+1. **String normalization** — lowercase, strip punctuation, expand common abbreviations
+2. **Schema enforcement** — an entity typed as `Fruit` cannot be the same as an entity typed as `Company` even if the name matches
+3. **Embedding similarity** — cluster entity names by embedding similarity to find likely duplicates
+4. **High-frequency entity review** — any entity that appears in more than 1% of documents deserves manual inspection; it is almost certainly suffering from proliferation
+5. **Canonical name resolution** — maintain a lookup table that maps known aliases to canonical IDs (`AAPL → apple-inc-canonical`)
+
+Budget time for entity resolution. In practice it takes as long as the extraction pipeline to get right, and skipping it produces a graph that looks good in isolation but fails in production queries.
+
+### Where it fails
+
+GraphRAG does not work in every situation. Do not force it on corpora where it does not fit.
+
+**Sparse relational corpora.** If your corpus is 10,000 standalone how-to guides with no cross-references, the extraction step will produce many entities and few meaningful relationships. The graph has nodes but no edges — traversal cannot cross documents, and you end up with a more expensive version of vanilla RAG.
+
+**Highly conversational text.** Customer service chat logs, social media posts, and meeting transcripts contain informal language, partial sentences, implicit context, and references to entities without naming them. NER and LLM extraction both perform poorly. The resulting graph is noisy and incomplete.
+
+**Event logs and time-series narratives.** Corpora where relationships are temporal or sequential rather than semantic — "this event caused that event 3ms later" — do not map naturally to entity-relationship graphs. The relational structure that matters is time-ordering, which graphs represent awkwardly.
+
+**Domains where the relationships are more important than the entities.** If you care about *how* things relate rather than *what* the entities are, graph traversal is less useful. Process documentation, mathematical proofs, and logical argument chains fall into this category.
+
+### Where GraphRAG fits in the bigger system
+
+```
+Index time:
+  docs → [chunk] → [entity + relationship extraction (LLM)] →
+    [entity resolution / dedup] → [graph store] + [vector store]
+  graph → [community detection (Leiden)] → [community summaries (LLM)] →
+    [embed summaries] → [vector store]
+
+Query time:
+  query → [extract query entities] →
+    parallel: [vector retrieval over chunks]
+            + [graph traversal from query entities]
+            + [vector retrieval over community summaries]  ← for global queries
+    → [merge results, deduplicate] → [optional rerank] → LLM context
+```
+
+GraphRAG is not a pipeline replacement. It is a retrieval layer that sits alongside vector retrieval, handling the query types that vector retrieval cannot. The chunk embedding pipeline still runs. The vector store still exists. Graph construction adds an additional index — the entity graph — that enables a qualitatively different retrieval mode.
+
+The investment is front-loaded: graph construction is expensive and requires careful engineering (schema design, entity resolution, extraction quality tuning). The payoff is at query time, for the specific query types that require relational reasoning across documents. If those query types represent a significant fraction of your users' needs, the investment is justified. If they represent 2% of queries, vanilla RAG with hybrid search will serve you better.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and design reviews. They are scenario-based: you are given a specific situation, constraints, and must reason from principles. There is no single right answer — what is graded is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="knowledge-graph"
+  question="**Design choice.** Your team is building RAG over your company's regulatory compliance documentation — 10,000 PDFs of policies, contracts, and audit reports, with frequent cross-references between policies. The vanilla RAG demo works for simple lookups but struggles when users ask 'show me all controls affected by GDPR Article 17 that have changed since last quarter's audit.' Would you propose GraphRAG? Walk through your reasoning: what entity types and relationship types you'd define in your schema, why this query fails vanilla retrieval structurally, and estimate the one-time construction cost vs ongoing vanilla RAG maintenance for this corpus."
+/>
+
+<RecallPrompt
+  concept="entity-extraction"
+  question="**Production debug.** Your GraphRAG system extracted 50,000 entities from 1,000 documents. Performance looked acceptable in eval, but production queries return strange results — searching for 'Apple' sometimes returns AAPL stock info, sometimes Apple Inc. company history, sometimes apple-the-fruit recipes, with no connection between them. Diagnose this failure step by step. What is the broken step in the pipeline, what specific fix would you apply first, and how would you validate that the fix worked before re-running the full extraction?"
+/>
+
+<RecallPrompt
+  concept="multi-hop-questions"
+  question="**Architecture call.** Your CTO asks why you're spending engineering effort on GraphRAG when 'the latest frontier model has a 1M-token context window — just stuff the whole corpus in there.' Give a number-based response. For a 100K-document corpus averaging 800 tokens each, calculate the per-query token cost of full-context stuffing vs GraphRAG retrieval. Then identify the two classes of queries where full-context stuffing wins, and the two where graph traversal wins. Under what corpus size and query distribution does your CTO's argument become valid?"
+/>
+
+<RecallPrompt
+  concept="graph-traversal-retrieval"
+  question="**Cost vs quality.** You have 100K documents averaging 800 tokens each. Initial estimate: $400 to extract entities and relationships via GPT-4, plus $50 for embeddings, plus $200 for community report generation. Your CFO wants to know if there is a cheaper path. Walk through three concrete alternatives — using a smaller extraction model, using a hybrid extraction-plus-vector approach, or skipping GraphRAG entirely — and quantify the tradeoff for each. What is your recommendation, and what eval metric would you use to measure whether the cheaper path was good enough?"
+/>
+
+<RecallPrompt
+  concept="community-detection"
+  question="**Senior eng pushback.** A teammate proposes: 'We should build a GraphRAG layer for ALL of our RAG features from now on — it's strictly better than vanilla.' Push back with specifics. Name three use cases in your current product where GraphRAG would add cost without improving answer quality, and explain structurally why vanilla retrieval is sufficient for each. Then describe the one feature area where you would actually advocate GraphRAG, and what evidence you would need to see before committing the engineering effort."
+/>

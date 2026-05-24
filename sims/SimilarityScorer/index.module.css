@@ -1,0 +1,42 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0;
+}
+.label { font-weight: 600; color: #374151; font-size: 0.9em; }
+.field textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.95em;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  resize: vertical;
+}
+.tokens { font-size: 0.8em; color: #6b7280; font-family: monospace; }
+.scoreRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.scoreLabel { color: #4b5563; }
+.scoreValue { font-size: 1.4em; font-family: monospace; }
+.barTrack {
+  width: 100%;
+  height: 12px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 0.4rem;
+}
+.barFill { height: 100%; transition: width 0.15s, background 0.15s; }
+.note { font-size: 0.85em; color: #6b7280; margin-top: 0.75rem; }

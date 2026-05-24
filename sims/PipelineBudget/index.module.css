@@ -1,0 +1,259 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.title {
+  margin: 0 0 1rem;
+  font-size: 1em;
+  font-weight: 700;
+  color: #111827;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 780px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Panes ── */
+
+.leftPane,
+.rightPane {
+  min-width: 0;
+}
+
+.paneTitle {
+  margin: 0 0 0.6rem;
+  font-size: 0.82em;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Stage list ── */
+
+.stageList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.stageRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 0.8em;
+  transition: background 0.12s, border-color 0.12s;
+  flex-wrap: wrap;
+}
+
+.stageOn {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+}
+
+.stageOff {
+  background: white;
+  opacity: 0.7;
+}
+
+.stageLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.stageLabel input[type='checkbox'] {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.stageLabel input[type='checkbox']:disabled {
+  cursor: default;
+}
+
+.stageName {
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stageMeta {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.metaChip {
+  background: #e5e7eb;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-family: monospace;
+  font-size: 0.78em;
+  color: #4b5563;
+}
+
+.noopBadge {
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.72em;
+  font-style: italic;
+}
+
+.warnBadge {
+  background: #fef3c7;
+  border: 1px solid #fbbf24;
+  color: #92400e;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-size: 0.72em;
+  cursor: help;
+  flex-shrink: 0;
+}
+
+/* ── Sliders ── */
+
+.sliderLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.85em;
+  color: #374151;
+}
+
+.sliderLabel input[type='range'] {
+  flex: 1;
+}
+
+/* ── Big numbers ── */
+
+.bigNumbers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.bigCard {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+}
+
+.bigLabel {
+  font-size: 0.72em;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.15rem;
+}
+
+.bigValue {
+  font-size: 1.6em;
+  font-weight: 800;
+  font-family: monospace;
+  color: #111827;
+  line-height: 1.1;
+}
+
+.bigUnit {
+  font-size: 0.55em;
+  font-weight: 600;
+  color: #6b7280;
+  margin-left: 0.15em;
+}
+
+.bigHint {
+  font-size: 0.72em;
+  color: #9ca3af;
+  margin-top: 0.1rem;
+}
+
+/* Latency colors */
+.green {
+  color: #059669;
+}
+.amber {
+  color: #d97706;
+}
+.red {
+  color: #dc2626;
+}
+
+/* ── Summary box ── */
+
+.summaryBox {
+  margin: 0.75rem 0 0;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8em;
+  color: #374151;
+  line-height: 1.4;
+}
+
+.summaryLabel {
+  color: #111827;
+}
+
+.summaryText {
+  color: #4b5563;
+}
+
+/* ── Preset buttons ── */
+
+.presetRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.presetBtn {
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 0.35em 0.7em;
+  font-size: 0.8em;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.presetBtn:hover {
+  background: #f5f3ff;
+  border-color: #a78bfa;
+  color: #4c1d95;
+}
+
+.presetBtn:active {
+  background: #ede9fe;
+}

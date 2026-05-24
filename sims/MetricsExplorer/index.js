@@ -1,0 +1,116 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { useEffect, useMemo, useState } from 'react';
+import { reportState } from '../../src/lib/reportState';
+import styles from './index.module.css';
+const QUERY = "How do I revoke a user's access?";
+const DOCS = [
+    { rank: 1, text: 'To remove permissions, navigate to Settings → Users and click Revoke.', score: 0.92, defaultRelevant: true },
+    { rank: 2, text: 'Access tokens are issued by the auth server and stored in cookies.', score: 0.87, defaultRelevant: false },
+    { rank: 3, text: 'Revoking access requires admin privileges on the team workspace.', score: 0.81, defaultRelevant: true },
+    { rank: 4, text: 'The Users panel shows all members; select a member and choose Revoke Access.', score: 0.76, defaultRelevant: true },
+    { rank: 5, text: 'User authentication uses OAuth 2.0 with PKCE for security.', score: 0.71, defaultRelevant: false },
+    { rank: 6, text: 'To delete a user account permanently, contact support.', score: 0.65, defaultRelevant: false },
+    { rank: 7, text: 'API access keys can be rotated from the developer settings page.', score: 0.59, defaultRelevant: false },
+    { rank: 8, text: 'Granting access to new users is done from the same Settings → Users page.', score: 0.53, defaultRelevant: true },
+    { rank: 9, text: 'Lost access usually means a session expired; sign in again.', score: 0.47, defaultRelevant: false },
+    { rank: 10, text: 'Audit logs record every permission change with timestamp and actor.', score: 0.41, defaultRelevant: false },
+];
+// Default relevance: ranks 1, 3, 4, 8 are relevant
+// Precision@5 = 3/5 = 0.6
+// Recall@5 = 3/4 = 0.75
+// MRR = 1/1 = 1.0
+function computeMetrics(relevant, k) {
+    const totalRelevant = relevant.filter(Boolean).length;
+    const relevantRanks = relevant
+        .map((r, i) => (r ? i + 1 : 0))
+        .filter(r => r > 0);
+    // Relevant in top-K
+    const topK = relevant.slice(0, k);
+    const relevantAtK = topK.filter(Boolean).length;
+    // Precision@K
+    const precisionAtK = relevantAtK / k;
+    // Recall@K
+    const recallAtK = totalRelevant === 0 ? 0 : relevantAtK / totalRelevant;
+    // MRR: 1 / rank of first relevant doc (in full list)
+    const firstRelevantRank = relevant.findIndex(Boolean);
+    const mrr = firstRelevantRank === -1 ? 0 : 1 / (firstRelevantRank + 1);
+    // AP@K: average of precision@i for each i in top-K where doc i is relevant
+    // Denominator is number of relevant docs in top-K (standard average over relevant positions)
+    let apSum = 0;
+    let relevantSoFar = 0;
+    for (let i = 0; i < k; i++) {
+        if (topK[i]) {
+            relevantSoFar++;
+            apSum += relevantSoFar / (i + 1);
+        }
+    }
+    const apAtK = relevantAtK === 0 ? 0 : apSum / relevantAtK;
+    // nDCG@K: DCG@K / IDCG@K using binary relevance, discount = log2(rank+1)
+    let dcg = 0;
+    for (let i = 0; i < k; i++) {
+        const gain = topK[i] ? 1 : 0;
+        dcg += gain / Math.log2(i + 2); // log2((i+1)+1) = log2(i+2)
+    }
+    // Ideal DCG: place all relevant docs at top positions
+    const idealPositions = Math.min(totalRelevant, k);
+    let idcg = 0;
+    for (let i = 0; i < idealPositions; i++) {
+        idcg += 1 / Math.log2(i + 2);
+    }
+    const ndcgAtK = idcg === 0 ? 0 : dcg / idcg;
+    return {
+        totalRelevant,
+        relevantAtK,
+        precisionAtK,
+        recallAtK,
+        mrr,
+        apAtK,
+        ndcgAtK,
+        relevantRanks,
+    };
+}
+function getIntuitionMessage(precisionAtK, recallAtK, mrr, ndcgAtK, k) {
+    if (mrr > 0.6 && precisionAtK < 0.4) {
+        return 'MRR is rewarding you for ranking the first relevant doc near the top, but most of your top-K is irrelevant. Good for the "show me the answer" use case; bad if your LLM has to filter.';
+    }
+    if (precisionAtK > 0.6 && recallAtK < 0.4) {
+        return `Your top-${k} is dense with relevant docs, but you're missing most of the actually-relevant set. Good if K is tight; bad if your downstream LLM needs full coverage.`;
+    }
+    if (ndcgAtK > 0 && precisionAtK > ndcgAtK + 0.2) {
+        return `Your top-${k} contains the right docs, but they're not in the right order. A reranker would help.`;
+    }
+    if (precisionAtK === 0 && recallAtK === 0) {
+        return `No relevant docs in the top-${k}. Retrieval is missing the mark entirely — consider expanding K or improving embeddings.`;
+    }
+    if (precisionAtK >= 0.8 && recallAtK >= 0.8) {
+        return 'Excellent retrieval! High precision and recall both — your system is surfacing the right docs without much noise.';
+    }
+    return `Precision@${k}: ${(precisionAtK * 100).toFixed(0)}% of retrieved docs are relevant. Recall@${k}: ${(recallAtK * 100).toFixed(0)}% of all relevant docs were found.`;
+}
+export function MetricsExplorer() {
+    const [k, setK] = useState(5);
+    const [relevance, setRelevance] = useState(DOCS.map(d => d.defaultRelevant));
+    const metrics = useMemo(() => computeMetrics(relevance, k), [relevance, k]);
+    const intuition = useMemo(() => getIntuitionMessage(metrics.precisionAtK, metrics.recallAtK, metrics.mrr, metrics.ndcgAtK, k), [metrics, k]);
+    useEffect(() => {
+        reportState('MetricsExplorer', {
+            k,
+            totalRelevant: metrics.totalRelevant,
+            relevantAtK: metrics.relevantAtK,
+            precisionAtK: metrics.precisionAtK,
+            recallAtK: metrics.recallAtK,
+            mrr: metrics.mrr,
+            apAtK: metrics.apAtK,
+            ndcgAtK: metrics.ndcgAtK,
+            relevantRanks: metrics.relevantRanks,
+        });
+    }, [k, metrics]);
+    function toggleRelevance(index) {
+        setRelevance(prev => {
+            const next = [...prev];
+            next[index] = !next[index];
+            return next;
+        });
+    }
+    return (_jsxs("div", { className: styles.sim, children: [_jsxs("p", { className: styles.query, children: [_jsx("strong", { children: "Query:" }), " ", QUERY] }), _jsxs("div", { className: styles.layout, children: [_jsxs("div", { className: styles.rankedList, children: [_jsx("h4", { className: styles.sectionTitle, children: "Ranked Results" }), DOCS.map((doc, i) => (_jsxs("div", { "data-testid": `doc-row-${doc.rank}`, className: `${styles.docRow} ${relevance[i] ? styles.relevant : ''} ${i < k ? styles.inTopK : styles.belowK}`, children: [_jsxs("span", { className: styles.rankBadge, children: ["#", doc.rank] }), _jsx("span", { className: styles.docText, children: doc.text }), _jsx("span", { className: styles.scoreChip, children: doc.score.toFixed(2) }), _jsxs("label", { className: styles.toggleLabel, children: [_jsx("input", { type: "checkbox", "data-testid": `relevance-toggle-${doc.rank}`, checked: relevance[i], onChange: () => toggleRelevance(i), "aria-label": `Mark rank ${doc.rank} as relevant` }), "Relevant?"] })] }, doc.rank))), _jsx("p", { className: styles.hint, children: "Shaded rows are within top-K. Toggle relevance to see metrics update." })] }), _jsxs("div", { className: styles.metricsPanel, children: [_jsx("h4", { className: styles.sectionTitle, children: "Metrics" }), _jsxs("label", { className: styles.sliderLabel, children: [_jsxs("span", { children: ["K:\u00A0", _jsx("strong", { children: k })] }), _jsx("input", { type: "range", min: 1, max: 10, step: 1, value: k, "aria-label": "K \u2014 number of retrieved documents to evaluate", onChange: e => setK(Number(e.target.value)) })] }), _jsxs("div", { className: styles.metricsList, children: [_jsxs("div", { className: styles.metricCard, children: [_jsxs("div", { className: styles.metricHeader, children: [_jsxs("span", { className: styles.metricName, children: ["Precision@", k] }), _jsx("span", { className: styles.metricValue, children: metrics.precisionAtK.toFixed(3) })] }), _jsxs("p", { className: styles.metricExplain, children: ["answers: what fraction of my top-", k, " were relevant?"] }), _jsx("div", { className: styles.metricBar, children: _jsx("div", { className: styles.metricFill, style: { width: `${metrics.precisionAtK * 100}%`, background: '#6366f1' } }) })] }), _jsxs("div", { className: styles.metricCard, children: [_jsxs("div", { className: styles.metricHeader, children: [_jsxs("span", { className: styles.metricName, children: ["Recall@", k] }), _jsx("span", { className: styles.metricValue, children: metrics.recallAtK.toFixed(3) })] }), _jsxs("p", { className: styles.metricExplain, children: ["answers: did I get any of the relevant docs in my top-", k, "?"] }), _jsx("div", { className: styles.metricBar, children: _jsx("div", { className: styles.metricFill, style: { width: `${metrics.recallAtK * 100}%`, background: '#059669' } }) })] }), _jsxs("div", { className: styles.metricCard, children: [_jsxs("div", { className: styles.metricHeader, children: [_jsx("span", { className: styles.metricName, children: "MRR" }), _jsx("span", { className: styles.metricValue, children: metrics.mrr.toFixed(3) })] }), _jsx("p", { className: styles.metricExplain, children: "answers: how high did I rank the first relevant doc?" }), _jsx("div", { className: styles.metricBar, children: _jsx("div", { className: styles.metricFill, style: { width: `${metrics.mrr * 100}%`, background: '#f59e0b' } }) })] }), _jsxs("div", { className: styles.metricCard, children: [_jsxs("div", { className: styles.metricHeader, children: [_jsxs("span", { className: styles.metricName, children: ["AP@", k] }), _jsx("span", { className: styles.metricValue, children: metrics.apAtK.toFixed(3) })] }), _jsx("p", { className: styles.metricExplain, children: "answers: how consistently did I rank relevant docs above irrelevant ones?" }), _jsx("div", { className: styles.metricBar, children: _jsx("div", { className: styles.metricFill, style: { width: `${metrics.apAtK * 100}%`, background: '#ec4899' } }) })] }), _jsxs("div", { className: styles.metricCard, children: [_jsxs("div", { className: styles.metricHeader, children: [_jsxs("span", { className: styles.metricName, children: ["nDCG@", k] }), _jsx("span", { className: styles.metricValue, children: metrics.ndcgAtK.toFixed(3) })] }), _jsx("p", { className: styles.metricExplain, children: "answers: did I rank the most-relevant doc highest, and so on down the list?" }), _jsx("div", { className: styles.metricBar, children: _jsx("div", { className: styles.metricFill, style: { width: `${metrics.ndcgAtK * 100}%`, background: '#0ea5e9' } }) })] })] }), _jsxs("div", { className: styles.summary, children: [_jsxs("span", { children: [metrics.relevantAtK, " relevant in top-", k] }), _jsxs("span", { children: [metrics.totalRelevant, " total relevant"] })] }), _jsxs("div", { className: styles.intuitionPanel, children: [_jsx("strong", { className: styles.intuitionTitle, children: "Intuition" }), _jsx("p", { className: styles.intuitionText, children: intuition })] })] })] })] }));
+}

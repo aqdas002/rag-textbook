@@ -1,0 +1,323 @@
+---
+id: evals
+title: Evals
+estimatedMinutes: 30
+concepts: [precision-recall-at-k, mean-reciprocal-rank, ndcg, faithfulness, llm-as-judge, eval-set-construction]
+prerequisites: [top-k-retrieval, hybrid-search]
+---
+
+import { MetricsExplorer } from '@sims/MetricsExplorer'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## Why evals matter more than your model choice
+
+The previous chapter closed with a complete retrieval pipeline: chunking, embedding, BM25, dense search, RRF fusion. You now have a system that retrieves something. The question is whether it retrieves the *right* thing — and whether you can tell the difference between better and worse.
+
+That question separates senior AI engineers from everyone else. Not the ability to build the pipeline. The ability to *measure* it.
+
+Consider two teams, both shipping RAG products. Team A has a 50-query eval set with ground-truth labels: for each query, they know which documents are relevant and what the correct answer looks like. Team B is moving fast — they eyeball a few outputs, it looks good, they ship. Six months later: Team A has shipped eight retrieval improvements, each with a measurable lift metric attached. They swapped embedding models once, confirmed a 6-point recall@5 improvement, and kept it. They tried a reranker, saw MRR improve 0.12, justified the latency cost, shipped it. Team B has changed their embedding model three times based on cherry-picked anecdotes from demo sessions. They have a Slack thread titled "does the new model feel better to you?" that is 140 messages long and unresolved.
+
+The difference is not intelligence or effort. It is measurement infrastructure. Team A can answer "did this change make the system better?" in an afternoon. Team B cannot answer it at all.
+
+This pattern holds across every RAG system that has ever been built at scale. RAG quality is dominated by retrieval quality, chunking decisions, and the quality of your eval pipeline — not by which LLM you use or which version of an embedding model you're on. The LLM is the last mile. If retrieval is broken, the LLM cannot fix it. And if you cannot measure retrieval quality, you cannot systematically improve it.
+
+The rest of this chapter gives you the full measurement vocabulary: what metrics to use, how to compute them, how to build an eval set, and how to scale grading using LLMs as judges. By the end you will have a clear answer for every interview question that starts with "how would you evaluate your RAG system?"
+
+## The core pair: precision@K and recall@K
+
+Every retrieval metric starts from the same primitives: a query, a ranked list of K retrieved documents, and a ground-truth set of documents that are actually relevant. From these, two fundamental questions arise.
+
+**Precision@K** answers: of the K documents I retrieved, what fraction were actually relevant?
+
+```
+Precision@K = (relevant documents in top-K) / K
+```
+
+If you retrieve 5 documents and 3 are relevant, Precision@5 = 3/5 = 0.60.
+
+**Recall@K** answers: of all the relevant documents that exist in the corpus, what fraction did I find in my top-K?
+
+```
+Recall@K = (relevant documents in top-K) / (total relevant documents in corpus)
+```
+
+If 4 documents in the corpus are relevant to the query, and you found 3 of them in your top-5, Recall@5 = 3/4 = 0.75.
+
+**A worked example.** Query: "How do I revoke a user's access?" The corpus contains 10 documents. The ground truth says 4 of them are relevant (at ranks 1, 3, 4, and 8 in the ideal ranking). Your retriever returns a ranked list. At K=5:
+
+- Top-5 returned: ranks 1, 2, 3, 4, 5
+- Ranks 1, 3, 4 are relevant; rank 2 and 5 are not
+- Precision@5 = 3/5 = 0.60
+- Recall@5 = 3/4 = 0.75 (you found 3 of the 4 relevant docs; the 4th is at rank 8, outside your top-5)
+
+**Why "@K" matters.** Without a cutoff, you could always achieve perfect recall by returning every document in the corpus. The @K anchors evaluation to a realistic operating point — the actual number of documents you will pass to the LLM.
+
+**The most common mistake.** Engineers building Q&A bots instinctively optimize for precision: "are the docs I'm returning good?" But the more common production failure is low recall: the answer to the user's question *exists* in the corpus, but the retriever never surfaced it. For a support bot, a missed recall event means a user gets "I don't have that information" when the answer was sitting in the knowledge base. For a synthesis task, a missed recall event means an incomplete answer. Recall is usually the metric that predicts user satisfaction more closely than precision.
+
+The flip side: for a retriever that passes context directly to an LLM with a fixed context window, precision matters too — filling the window with irrelevant documents wastes tokens and confuses the LLM. The right metric to optimize is use-case specific. We cover this in In Practice.
+
+## Rank-aware metrics: MRR and nDCG
+
+Precision@K and Recall@K have a blind spot: they treat all positions within the top-K equally. A retriever that puts the most relevant document at rank 1 scores identically to one that buries it at rank 5, as long as both have the same count of relevant docs in the top-K window. For many real use cases — especially direct-answer Q&A bots where the LLM will lead with whatever is at the top — this matters enormously.
+
+Rank-aware metrics fix this by penalizing relevant documents that appear lower in the list.
+
+**Mean Reciprocal Rank (MRR).** For a single query, the reciprocal rank is `1 / rank_of_first_relevant_doc`. If the first relevant document is at rank 1, the score is 1.0. If it is at rank 3, the score is 1/3 ≈ 0.33. MRR is then the average of these reciprocal ranks across a set of queries:
+
+```
+MRR = (1/|Q|) · Σ_q  1 / rank_of_first_relevant(q)
+```
+
+MRR is simple and interpretable. Its limitation: it only cares about the first relevant document. If you care about surfacing all relevant documents (e.g., for synthesis), MRR does not capture whether the second and third relevant documents are ranked well.
+
+**Normalized Discounted Cumulative Gain (nDCG).** DCG sums the relevance of all documents in the ranked list, but applies a logarithmic discount to lower-ranked positions:
+
+```
+DCG@K = Σ_{i=1}^{K}  relevance(i) / log₂(i + 1)
+```
+
+For binary relevance (relevant = 1, not relevant = 0), rank 1 contributes `1 / log₂(2) = 1.0`, rank 2 contributes `1 / log₂(3) ≈ 0.63`, rank 5 contributes `1 / log₂(6) ≈ 0.39`. The drop-off is steep: a relevant document at rank 5 is worth less than half what it would be worth at rank 1.
+
+nDCG normalizes this score against the *ideal* DCG — the score you would get if all relevant documents were ranked perfectly from position 1. This makes nDCG a bounded [0, 1] score that is comparable across queries with different numbers of relevant documents:
+
+```
+nDCG@K = DCG@K / IDCG@K
+```
+
+**Before you run the sim, predict.** The MetricsExplorer below shows the default state: 4 relevant documents in a 10-doc corpus, positioned at ranks 1, 3, 4, and 8. At K=5, you have 3 relevant docs in-window. Take a prediction before touching anything.
+
+<PredictGate
+  concept="mean-reciprocal-rank"
+  question="The sim starts with relevant docs at ranks 1, 3, 4, and 8. Consider two changes: (A) toggle OFF the rank-1 doc so it becomes irrelevant, or (B) toggle OFF the rank-5 doc (which is currently NOT relevant — no change). For change A: which metric do you predict will change the most, and which the least? MRR starts at 1.0; Precision@5 starts at 0.60; nDCG@5 starts at ~0.754. Predict the new values before you interact."
+  hint="MRR only cares about the rank of the first relevant doc. nDCG discounts lower-ranked docs steeply. Precision@K is a flat count."
+>
+  <MetricsExplorer />
+</PredictGate>
+
+**What you should observe.** Toggle the rank-1 document from relevant to irrelevant (uncheck it). Watch all five metrics update.
+
+- **MRR** drops from 1.000 to 0.333. It drops the most, proportionally. MRR was 1.0 because the first relevant doc was at rank 1. Now the first relevant doc is at rank 3, so MRR = 1/3.
+- **Precision@5** drops from 0.600 to 0.400 — two relevant docs in top-5 instead of three, divided by 5.
+- **Recall@5** drops from 0.750 to 0.500 — two of the four total relevant docs in top-5 instead of three.
+- **nDCG@5** drops more sharply than precision, proportionally, because the rank-1 position carries the heaviest weight in the log discount. Moving a relevant document from rank 1 to "absent" removes the most valuable position in the DCG sum.
+- **AP@5** drops as well, because average precision rewards early relevant docs.
+
+Now restore rank 1 and try a different experiment: toggle rank 3 (currently relevant) to irrelevant. The rank-3 document contributes less to nDCG than the rank-1 document did, but more than a rank-5 document would. MRR is unaffected (rank-1 is still the first relevant). Precision and recall each drop by 0.20 and 0.25 respectively.
+
+**The key insight.** Precision@K and Recall@K count relevant documents; they do not care where in the list they appear. MRR only cares about where your *best* document landed. nDCG cares about where *all* relevant documents are, weighted by position. For a Q&A bot where "did the LLM get the right doc to read first?" matters, MRR is the most sensitive metric. For a comprehensive research synthesis, nDCG across all relevant docs in the window is more appropriate. Use the right tool for the right job.
+
+## End-to-end quality: faithfulness and correctness
+
+Retrieval metrics measure whether the right documents were fetched. They say nothing about whether the LLM produced a good answer. A RAG system can achieve Recall@5 = 0.92, pass the three most relevant documents straight into the LLM context, and still produce an answer that is wrong, hallucinated, or misleading. The metrics so far would not catch this.
+
+Two end-to-end metrics fill this gap.
+
+**Faithfulness** measures whether the final answer is grounded in the retrieved context. Specifically: does the answer contain any claims that cannot be supported by the documents passed to the LLM? A faithful answer is one where every assertion the LLM makes is traceable to a statement in the retrieved context. An unfaithful answer is one where the LLM generated content that went beyond — or contradicted — the context it was given.
+
+Faithfulness is a measure of *hallucination*: a faithful answer is not hallucinating (relative to its given context). It does not guarantee the answer is correct — if the retrieved context itself was wrong or incomplete, a faithful answer faithfully reproduces the error. But it does guarantee the LLM stayed within the evidence it was given.
+
+How teams measure it: annotate a sample of (query, retrieved context, LLM answer) triples. For each factual claim in the answer, check whether it is supported by the context. The faithfulness score is the fraction of claims that are supported. In practice this is measured automatically using LLM-as-judge (next section).
+
+**Correctness** measures whether the answer is right relative to a ground-truth reference answer. If the ground truth says "The return window is 30 days from the date of purchase" and the LLM says "The return window is 30 days," the answer is correct. If the LLM says "The return window is 30 days from the date of delivery," the answer is incorrect.
+
+How teams measure it: for each query, write a reference answer during eval set construction. Grade the LLM's answer against it — either exact-match (for simple factoid answers), ROUGE/BERTScore (for longer responses), or LLM-as-judge.
+
+**The critical divergence.** Faithfulness and correctness are independent, and their divergence is the most important thing to understand:
+
+| Scenario | Faithful? | Correct? | What happened |
+|---|---|---|---|
+| LLM answers from retrieved context, which contains the right answer | Yes | Yes | Ideal case |
+| LLM answers from retrieved context, which is incomplete or wrong | Yes | No | Retrieval failure — the right docs were not returned |
+| LLM adds claims not supported by context, but they happen to be right | No | Yes | Hallucination that got lucky — do not ship this |
+| LLM adds claims not in context, and they are wrong | No | No | Full hallucination |
+
+The second row is the most common production failure and the one most teams overlook. Their faithfulness score looks great — 94% — because the LLM is staying grounded in whatever context it receives. But customers keep reporting wrong answers. Why? Because the retriever is returning the *wrong* context. The LLM faithfully summarizes documents that were not actually relevant to the query. Faithfulness is 94%, but correctness is 61%.
+
+This is why you need both metrics, and why retrieval metrics and end-to-end metrics must both be tracked. A high faithfulness score does not mean your system works. It means your LLM is not making things up. The retriever can still be broken.
+
+## Scaling evaluation: LLM-as-judge
+
+Hand-grading 50 eval queries takes an afternoon. Hand-grading 5,000 queries every time you deploy a retrieval change is a full-time job. At scale, human grading is a bottleneck that either gets cut ("let's just look at a sample") or never runs at all ("we'll evaluate this next sprint"). Neither is acceptable for a production system where retrieval regressions happen silently.
+
+LLM-as-judge solves the throughput problem: use a capable LLM (GPT-4, Claude, etc.) to grade (query, retrieved context, answer) tuples against a rubric, at thousands of evaluations per hour. The LLM acts as an automated annotator, producing scores that approximate what a human expert would give.
+
+**The rubric matters more than the judge LLM.** A faithfulness rubric might read: "Score 1 if every factual claim in the answer is directly supported by the provided context. Score 0 if the answer contains any claim not in the context." A correctness rubric might provide the reference answer and ask the judge to score 1 if the candidate answer is semantically equivalent. The more specific the rubric, the more consistent the judge's output will be.
+
+**Calibration is not optional.** Before you trust an LLM to grade at scale, you must validate it against human labels. The process:
+
+1. Hand-grade 50–100 (query, context, answer) triples from your eval set.
+2. Run the same triples through your LLM judge with your proposed rubric.
+3. Compute Cohen's kappa between the human scores and the judge's scores.
+4. If kappa < 0.7, the agreement is too low — your rubric is ambiguous or the judge is miscalibrated. Iterate on the rubric.
+5. If kappa > 0.85, you have strong agreement and can grade at scale with confidence.
+
+This calibration step is what separates "LLM-as-judge that works" from "LLM-as-judge that produces plausible-looking numbers that correlate with nothing." It is the most skipped step in production eval pipelines, and the most important one.
+
+**The pitfalls you will encounter.**
+
+- **Position bias.** LLM judges systematically favor answers that appear first in a comparison, independent of quality. When comparing two candidate answers, randomize the order and average the scores.
+- **Verbosity bias.** Many LLM judges score longer answers higher, even when they contain more noise. Control for this in your rubric ("do not reward length").
+- **Self-preference.** If you use the same model family as both your RAG LLM and your judge LLM (e.g., GPT-4 evaluating GPT-4 output), the judge may score its own model's outputs more favorably than a different model's outputs. Use a different model family for judging when possible, or validate that self-preference is not present in your calibration data.
+- **Prompt sensitivity.** Small changes to the judge prompt can shift scores by 5–10 percentage points. Treat your judge prompt as versioned code — commit it, review it, and do not change it casually between eval runs.
+
+Despite these pitfalls, LLM-as-judge at scale — when properly calibrated — produces reliable signal for regression detection. The bar is not "perfect agreement with humans." The bar is "reliably catches regressions that a human would also catch." That bar is achievable with a Cohen's kappa above 0.7 and a consistent judge prompt.
+
+## The eval set is the product
+
+Everything in the previous four sections depends on having a real eval set. Without one, you cannot compute any of these metrics in a way that reflects production. The eval set is not scaffolding you build once and forget; it is a first-class artifact that determines the quality of all future development decisions.
+
+**What an eval set contains.** For each entry:
+- The user query (taken from real logs, not invented)
+- The ground-truth set of relevant documents (which docs from the corpus actually answer this query)
+- A reference answer (what a correct answer looks like)
+- Optional: the difficulty category, the failure mode that surfaced this query, the date added
+
+**How to build one.** Start small. Pull 20–50 queries from real user logs the day after you launch any prototype, even if it is internal. Do not invent queries — real queries contain the vocabulary, ambiguity, and edge cases that your system will actually face. Have a human (ideally a subject-matter expert, not the engineer who built the retriever) annotate which documents are relevant and write a reference answer. Add 5–10 new queries every time a new failure mode appears in production. By month three, you should have 200–500 queries.
+
+**The distribution problem.** The most expensive mistake in eval set construction is sampling bias. Engineers naturally gravitate toward queries that work well when building the set — they test the happy path first. The result is an eval set that shows 92% recall@5 while production users report the system misses half their questions. The eval set must reflect the distribution of real queries, including the hard ones, the edge cases, and the queries from product areas you have not optimized for yet.
+
+**Version control your eval set.** The eval set is code. It lives in the same repository as the retrieval logic. Changes to it are reviewed like changes to production code. Deleting queries that "don't seem right anymore" without replacing them is the eval equivalent of deleting tests because they fail.
+
+**The eval set is worth more than any model choice.** If you had to choose between spending a week tuning your embedding model or spending a week building a rigorous 200-query eval set with human labels, choose the eval set. The embedding model choice is recoverable — you can swap it and measure the impact. Without the eval set, you cannot measure the impact of anything.
+
+## In practice
+
+### Which metric for which use case
+
+The right metric depends on what your system is doing with the retrieved documents.
+
+**Q&A bots and factoid retrieval:** Optimize for Precision@5 and MRR. The LLM needs the right document near the top; recall is less critical because the LLM will read the top-K anyway, and you do not want to flood the context window. MRR tells you whether the most useful document is surfacing first.
+
+**Research and synthesis tasks:** Optimize for Recall@K. When a user asks for a comprehensive summary or a comparison across sources, missing a relevant document means the answer is incomplete. Missing the second or third relevant source is invisible to the LLM — it cannot report what it was never given. Raise K (retrieve more) and accept lower precision; the synthesis LLM can filter.
+
+**Ranked search (user-facing, Google-style results):** Optimize for nDCG@10. Position matters because users scan from the top. A highly relevant result at rank 7 is worth far less than the same result at rank 1. nDCG is the standard IR metric for exactly this use case.
+
+**End-to-end pipeline quality:** Track faithfulness and correctness *in addition to* retrieval metrics. A retrieval-only eval will not catch LLM-level failures. Faithfulness catches hallucination; correctness catches cases where retrieval surfaced the wrong context and the LLM faithfully summarized the wrong thing.
+
+### Reasonable target numbers in production
+
+These are calibrated from production systems across industries, not theoretical ideals. Use them as sanity checks, not targets to chase blindly.
+
+- **Recall@5:** 75–90% is typical for a well-tuned RAG system. Below 60% is a serious problem — one in three queries is not finding the relevant document. Above 90% is excellent and worth celebrating.
+- **Precision@5:** 50–70% is typical. You will return some irrelevant docs. The LLM handles this with instructions to stay grounded; precision below 40% starts to degrade answer quality noticeably.
+- **MRR:** 0.60–0.85 for direct-answer use cases. MRR below 0.5 means you frequently fail to rank the best document in the top 2, which is a retrieval architecture problem worth diagnosing.
+- **nDCG@10:** 0.65–0.85 for well-tuned ranked search. The BEIR benchmark shows that top retrieval systems achieve 0.60–0.80 across diverse corpora. Below 0.55 indicates systematic ranking issues.
+- **Faithfulness:** 90%+ using LLM-as-judge with a calibrated rubric. Below 85% means your LLM is regularly hallucinating beyond its context. This is usually a prompting problem (add a grounding instruction) or a context quality problem (retriever is returning irrelevant docs, and the LLM is filling gaps).
+- **Correctness:** 70–90% depending on domain. General knowledge Q&A: 80–90%. Technical documentation Q&A: 75–85%. Legal or medical: 60–75% even with strong prompting — these domains have high answer ambiguity and complex queries.
+
+### The tools people actually use
+
+You are not building your eval framework from scratch. These are the production choices:
+
+- **RAGAS** (open-source) — the most widely cited RAG evaluation library. Supports faithfulness, answer relevance, context precision, and context recall out of the box. Uses LLM-as-judge internally. Good starting point for teams who want standardized metrics without building their own rubrics.
+- **TruLens** — RAG observability and evaluation framework. Integrates LLM-as-judge with feedback functions, has a tracing UI, and supports multiple frameworks (LangChain, LlamaIndex, raw API). Strong for teams that want eval + observability in one tool.
+- **DeepEval** — pytest-style evaluation framework. You write eval cases as unit tests; they run in CI. Popular for teams that want evals integrated into their development workflow rather than run separately. Supports custom metrics and LLM-as-judge.
+- **LangSmith / LangFuse / Helicone** — observability-first platforms with eval features. If you are already using one of these for tracing, their eval integrations add grading on top of existing traces. LangSmith is the most mature; LangFuse is popular for its open-source option.
+- **Phoenix (Arize)** — open-source RAG evaluation and tracing. Good integration with LlamaIndex and LangChain. The UI makes it easy to slice eval results by query category.
+
+Most production teams use one of these as a base and extend it with domain-specific logic. Eval rubrics are almost always domain-specific — a faithfulness rubric for legal document Q&A is different from one for customer support. The framework gives you the infrastructure; you provide the rubric and the labeled data.
+
+### The eval set construction loop
+
+This is not a one-time project. It is a feedback loop that runs for the lifetime of the system.
+
+**Month 1:** Pull 20–50 queries from user logs or early testing sessions. Label them by hand (which docs are relevant, what is the correct answer). These are your first regression tests. Run the full eval suite on every significant retrieval change from day one.
+
+**Month 2–3:** Every time a user reports a failure — the bot said "I don't know" when the answer exists, the bot gave a wrong answer, the bot conflated two different topics — add a query representative of that failure to the eval set. Annotate it. By month three you should be at 200–500 queries.
+
+**Ongoing:** Treat the eval set like a test suite. Do not delete queries. Add new ones as new failure modes emerge. Periodically re-annotate old queries if the corpus changes significantly. Sample from the full query log distribution to prevent the set from drifting toward easy queries.
+
+**Distribution health check.** Every quarter, compare the distribution of your eval set queries against the actual query log. Length distribution, topic distribution, complexity distribution. If your eval set is skewed toward simple factoid queries and your users are increasingly asking multi-hop comparison questions, your eval scores will be optimistic.
+
+### LLM-as-judge calibration
+
+The calibration process deserves its own sub-section because it is the step most teams skip and the one that most often explains the gap between "eval looks great" and "production is broken."
+
+**The calibration protocol:**
+
+1. Take 50–100 examples from your eval set. These should be representative of the full difficulty range — include hard cases, not just easy ones.
+2. Have two human raters independently grade each example using your rubric. Compute inter-rater Cohen's kappa. If this is below 0.75, your rubric is ambiguous — humans cannot agree. Fix the rubric before involving an LLM.
+3. Run the LLM judge with your proposed prompt and rubric on the same 50–100 examples.
+4. Compute Cohen's kappa between the LLM's scores and the human consensus scores.
+5. If kappa > 0.85: strong calibration. Grade at scale.
+6. If 0.70 < kappa ≤ 0.85: acceptable. Document known disagreement areas (e.g., the judge is lenient on partial answers). Account for this in threshold setting.
+7. If kappa < 0.70: the judge prompt is broken. Common causes: the rubric has ambiguous criteria, the LLM is not following the format instruction, or the judge LLM cannot reliably identify domain-specific correct vs. incorrect claims. Iterate.
+
+Re-calibrate every time you change the judge prompt, change the judge model, or significantly change your rubric. A calibration that passed six months ago is not evidence of calibration today.
+
+### The single highest-leverage eval trick
+
+Build the smallest possible eval set you can actually commit to running on every deployment. Do not aim for 500 queries on day one. Aim for 20 queries that are genuinely representative and run automatically in CI.
+
+Here is the practical reality: a 500-query eval set that takes four hours to run is almost never run. An engineer makes a "small change" to the embedding call, figures they will run the full eval "later," and ships. The regression ships with the change. A 20-query eval set that runs in five minutes will be run. It will catch the obvious regressions. It will be maintained because maintaining 20 queries is easy.
+
+Start at 20. Run it on every PR that touches retrieval code. Expand by 5–10 queries every time a production failure mode is added. The growth is organic and sustainable. The eval set you run religiously is worth more than the comprehensive set that nobody runs.
+
+### The failure mode you will see in production
+
+> "Our eval scores are great — recall@5 is 89%, faithfulness is 93%. But customer support keeps escalating tickets where the bot is clearly wrong."
+
+This is not a contradiction. It is a symptom of an unrepresentative eval set. The most common causes:
+
+**Sampling bias in query construction.** The engineer who built the eval set drew queries from topics they knew the retriever handled well. The escalating tickets are coming from a product area — say, billing and refunds — that got two mentions in the eval set and fifty mentions in the escalation log.
+
+**Labels created by the same engineer who built the retriever.** This is anchoring bias: when you built the eval set, you labeled as "relevant" the documents that your retriever was already returning. The eval set looks representative because it was built from the retriever's perspective, not from the user's perspective. The retriever scores 89% recall@5 because the "relevant" documents are literally the ones the retriever finds well.
+
+**Eval done before a key pipeline change.** The retrieval-only eval was done before the grounding instruction was added to the LLM prompt. Since then, the system changed — but the eval set was never re-run with the new pipeline. The 93% faithfulness score is measuring a system that no longer exists.
+
+**The fix for all three:** date-stamp your eval results. Every eval run records which version of the retrieval code, which version of the LLM prompt, and when it was run. Periodically audit a random sample of "passing" eval examples against real production outputs. If they look systematically different, your eval set has drifted from reality.
+
+### Where evals fit in the bigger system
+
+```
+feature branch → unit tests → integration tests → [eval suite] → manual QA → ship
+                                                       ↓
+                                                regression detection
+                                                       ↓
+                                                release decision
+```
+
+The eval suite is part of CI. It runs on every PR that touches retrieval logic, chunking configuration, embedding model selection, or LLM prompt. A change that drops nDCG@5 by more than 3 points blocks merge until the team either justifies it (a deliberate precision/recall tradeoff) or fixes it.
+
+Without evals in CI, regression detection is delayed until a customer files a ticket. By then the regression has been live for days or weeks, potentially affecting thousands of users. With evals in CI, the regression is caught before merge, on the machine of the engineer who introduced it.
+
+The full pipeline this series has been building, now with the eval layer visible:
+
+```
+[Source docs] → [Extract] → [Chunk] → [Embed] → [Index (inverted + vector)]
+                                                        ↓
+query → [BM25 + dense, parallel] → [RRF merge] → [Rerank → top-5] → [LLM]
+                                                        ↓
+                                              [Eval suite in CI: retrieval + faithfulness]
+```
+
+The eval suite is not observing the system from outside; it is a structural component of the development process. That is the mindset shift that distinguishes engineers who ship reliable RAG from engineers who are always surprised by production quality.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and design reviews. They are scenario-based: you are given a specific situation, constraints, and must reason from principles. There is no single right answer — what is graded is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="eval-set-construction"
+  question="**Production debug.** Your RAG system's customer-reported accuracy dropped 10% after the latest deploy, but your offline eval scores are unchanged — recall@5 is still 89%, faithfulness is still 93%. Walk through how you'd diagnose this. What is your first hypothesis, and what is the first diagnostic you run? What does it mean if the eval scores look clean but production is broken, and what are the three most likely root causes?"
+/>
+
+<RecallPrompt
+  concept="precision-recall-at-k"
+  question="**Design choice.** You're building RAG over a corpus of customer support tickets. The product team has two use cases: (a) auto-suggesting answers to agents who need a specific resolution for a specific ticket, and (b) surfacing common issue patterns for the analytics team who wants comprehensive coverage of topics. Pick the right retrieval metric for each use case and explain why they differ. What is your eval set construction strategy for a corpus where new ticket types appear every month?"
+/>
+
+<RecallPrompt
+  concept="llm-as-judge"
+  question="**Cost vs quality.** Your team uses GPT-4 as LLM-as-judge for nightly eval runs. Each eval run costs $400. Your CEO asks whether you can switch to a smaller model to cut costs by 80%. Walk through the calibration experiment you would run before making that change. What is your accept/reject threshold, what is the minimum sample size for a reliable calibration, and what do you do if the calibration fails for a specific metric category (e.g., faithfulness passes but correctness fails)?"
+/>
+
+<RecallPrompt
+  concept="faithfulness"
+  question="**Failure-mode trace.** Your offline retrieval@5 is 91% and your faithfulness score is 94%. But customers consistently report the bot says 'I don't have information about X' for questions where the answer is clearly in the corpus. What is the most likely failure mode? How is it possible that retrieval@5 = 91% and faithfulness = 94% while users are getting 'I don't know' responses? Trace through the pipeline step by step and identify where this specific failure pattern originates."
+/>
+
+<RecallPrompt
+  concept="ndcg"
+  question="**Senior eng pushback.** A teammate proposes: 'We don't need a labeled eval set — we can just use GPT-4 to generate queries from our corpus and grade itself end-to-end. No human labeling required.' Push back. Where does this approach fail structurally? What biases does it introduce into both the query distribution and the grading? What would you do instead with the same budget — a week of engineering time and $500 of compute?"
+/>

@@ -1,0 +1,363 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: #111827;
+}
+
+/* ─── Query selector ─────────────────────────────────────────────────────── */
+
+.queryRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.queryLabel {
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+
+.querySelect {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.85em;
+  background: white;
+  cursor: pointer;
+}
+
+/* ─── Side-by-side layout ─────────────────────────────────────────────────── */
+
+.mainLayout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+@media (max-width: 768px) {
+  .mainLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Shared panel styles ─────────────────────────────────────────────────── */
+
+.vanillaColumn,
+.agentColumn {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 0.9em;
+  color: #374151;
+  font-weight: 700;
+}
+
+.panelSubtitle {
+  margin: 0;
+  font-size: 0.78em;
+  color: #6b7280;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15em 0.6em;
+  border-radius: 999px;
+  font-size: 0.75em;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badgeGreen {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badgeRed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* ─── Vanilla panel ───────────────────────────────────────────────────────── */
+
+.chunkCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.8em;
+}
+
+.rankBadge {
+  background: #6366f1;
+  color: white;
+  border-radius: 999px;
+  padding: 0.1em 0.45em;
+  font-size: 0.75em;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chunkBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.chunkText {
+  margin: 0 0 0.2em;
+  line-height: 1.4;
+  color: #374151;
+}
+
+.sourceTag {
+  font-size: 0.75em;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+.synthCard {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.8em;
+  color: #1e40af;
+}
+
+.synthText {
+  margin: 0.25em 0 0;
+  line-height: 1.4;
+}
+
+.costRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78em;
+  color: #6b7280;
+  margin-top: auto;
+}
+
+.costLabel {
+  font-weight: 600;
+}
+
+.costValue {
+  font-family: monospace;
+  color: #374151;
+}
+
+.costNote {
+  color: #9ca3af;
+}
+
+/* ─── Agent panel ─────────────────────────────────────────────────────────── */
+
+.playControls {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.playBtn,
+.skipBtn,
+.resetBtn {
+  padding: 0.2em 0.7em;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.78em;
+  cursor: pointer;
+  background: white;
+  color: #374151;
+}
+
+.playBtn:hover,
+.skipBtn:hover,
+.resetBtn:hover {
+  background: #f3f4f6;
+}
+
+/* ─── Timeline ────────────────────────────────────────────────────────────── */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.stepCard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  padding: 0.6rem;
+  font-size: 0.8em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-left: 3px solid #6366f1;
+}
+
+.stepNumber {
+  font-weight: 700;
+  font-size: 0.78em;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stepSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.stepLabel {
+  font-size: 0.7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+}
+
+.stepThought {
+  color: #374151;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.stepAction {
+  background: #1e293b;
+  color: #7dd3fc;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  display: inline-block;
+}
+
+.stepObservation {
+  color: #065f46;
+  background: #ecfdf5;
+  border-radius: 3px;
+  padding: 0.15em 0.4em;
+  line-height: 1.4;
+  display: inline-block;
+}
+
+.thinkingCard {
+  background: #fafafa;
+  border: 1px dashed #d1d5db;
+  border-radius: 4px;
+  padding: 0.5rem;
+  text-align: center;
+}
+
+.thinkingDots {
+  font-size: 0.78em;
+  color: #9ca3af;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.finalAnswerCard {
+  background: #1e293b;
+  color: #f1f5f9;
+  border-radius: 5px;
+  padding: 0.6rem;
+  font-size: 0.8em;
+  border-left: 3px solid #22c55e;
+}
+
+.finalAnswerText {
+  margin: 0.3em 0 0;
+  line-height: 1.5;
+}
+
+/* ─── Stats panel ─────────────────────────────────────────────────────────── */
+
+.statsPanel {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8em;
+  margin-top: auto;
+}
+
+.statRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.1em 0;
+}
+
+.statLabel {
+  color: #374151;
+}
+
+.statValue {
+  font-family: monospace;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.costHighlight {
+  color: #dc2626;
+}
+
+.statMultiplier {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #bbf7d0;
+  text-align: center;
+  font-weight: 700;
+  color: #065f46;
+  font-size: 0.9em;
+}
+
+/* ─── Bottom insight panel ────────────────────────────────────────────────── */
+
+.insightPanel {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  font-size: 0.875em;
+  color: #78350f;
+  line-height: 1.5;
+}
