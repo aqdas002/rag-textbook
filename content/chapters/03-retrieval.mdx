@@ -6,6 +6,110 @@ concepts: [top-k-retrieval, relevance-diversity-tradeoff, mmr]
 prerequisites: [cosine-similarity, chunk-retrieval-impact]
 ---
 
-## Retrieval
+import { TopKRetriever } from '@sims/TopKRetriever'
+import { MMRRetriever } from '@sims/MMRRetriever'
+import { PredictGate, RecallPrompt } from '@/components'
 
-*(Content coming — placeholder while routing is wired up.)*
+## The top-K primitive
+
+You've embedded your chunks and stored them in a vector index. A query arrives. Now what?
+
+The answer is almost always some version of the same thing: **rank every chunk by its similarity to the query, then take the K highest-ranked ones.** That's top-K retrieval. Everything else in this chapter is a variation on or reaction to this primitive.
+
+The similarity function is typically cosine similarity — the same measure from the Embeddings chapter. The query is embedded using the same model as the corpus, giving it a point in the same vector space. Then you compute the angle between the query vector and every document vector. The K chunks with the smallest angles (highest cosine similarity) win.
+
+A few things this approach gets right: it's fast with an approximate nearest-neighbor index, it generalizes across query types, and the score is interpretable — you always have a number you can inspect. What it gets wrong comes next.
+
+## Watching top-K work
+
+Before running the sim, think about what you'd expect.
+
+<PredictGate
+  concept="top-k-retrieval"
+  question="What do you expect to happen as you increase K from 1 to 6? At what point do you think the retrieved results stop being useful for a query about Paris?"
+  hint="There are 8 documents in the corpus. Some are Paris-related, others are not. Think about what the 4th and 5th most similar documents to 'Tell me about Paris.' might be."
+>
+  <TopKRetriever initialK={3} />
+</PredictGate>
+
+At K=1 or K=2, the retrieved set is tight: just the documents that clearly mention Paris or France. At K=4 or K=5, documents about Tokyo, sushi, or programming languages start slipping in. Their similarity scores are non-zero — the word "the" appears in every document, which creates a small baseline similarity even for completely off-topic chunks.
+
+This is the precision-recall tradeoff in its most naked form. **Small K gives you high precision but risks missing something relevant.** If a query needs two pieces of information and you only fetch one, your LLM can't synthesize an answer from what it never saw. **Large K gives you more recall but introduces noise.** A 4096-token context window fills up fast; chunks that don't belong push out chunks that do.
+
+The right K is not 3 or 5 or 10. It depends on your query distribution, your chunk size, and how densely your corpus covers the topic. Measure on real queries.
+
+(Note: this sim uses toy bag-of-words cosine similarity, not real embeddings. Real embeddings would push the Paris/Eiffel/Louvre documents closer together and Tokyo/Python further apart, making the cutoff cleaner — but the shape of the problem is the same.)
+
+## The redundancy problem
+
+Top-K assumes that the K most similar documents are the K most *useful* documents. That assumption breaks down as soon as your corpus contains near-duplicate content.
+
+Imagine a knowledge base about a product where the same FAQ answer appears verbatim in three places: the main FAQ page, a troubleshooting guide, and a getting-started document. A user asks a question that matches that FAQ. Under pure top-K retrieval, your K=3 result set is three copies of the same answer. You've used your entire retrieval budget on one piece of information.
+
+This isn't hypothetical. It happens whenever you have:
+
+- Product documentation with version-specific copies of the same page
+- News articles reporting the same event with slight paraphrasing
+- Customer support corpora where the same resolution is pasted into multiple tickets
+- Any corpus that grew organically and was never deduplicated
+
+The result is that your LLM sees K copies of fact A and zero copies of facts B, C, and D — even though B, C, and D might be exactly what completes the answer. **Pure relevance ranking can silently waste your retrieval budget on redundancy.**
+
+## MMR — relevance vs diversity
+
+Maximal Marginal Relevance (MMR) is a greedy algorithm that reranks documents to balance relevance against redundancy. The score for each candidate document at each selection step is:
+
+```
+MMR_score = λ · sim(doc, query) − (1 − λ) · max_{selected} sim(doc, selected_doc)
+```
+
+The first term rewards relevance to the query. The second term penalizes similarity to documents you've already selected. Lambda (λ) controls the balance: λ=1 reduces MMR to vanilla top-K; λ=0 selects the most diverse set possible regardless of relevance.
+
+Before running the sim, think about what λ=1 should produce.
+
+<PredictGate
+  concept="mmr"
+  question="If you set λ = 1.0, MMR ignores the redundancy penalty entirely. What do you expect its results to look like compared to vanilla top-K?"
+  hint="Look at the MMR formula. When λ = 1, the second term vanishes completely. What's left?"
+>
+  <MMRRetriever initialLambda={0.5} />
+</PredictGate>
+
+At λ=1, MMR and vanilla top-K select identical documents — confirming the formula works as described. As you drag λ toward 0, documents diverge: MMR starts swapping in lower-relevance-but-different documents to avoid repetition.
+
+The interesting region is the middle. At λ=0.5, MMR balances relevance and diversity. For this toy corpus and query, it may swap the third Paris-adjacent document for something topically distinct — say, a document about Tokyo — because the redundancy penalty outweighs the marginal relevance gain.
+
+**Lambda is a hyperparameter, not a constant.** The right value depends on your use case:
+
+- Queries that need confirmation ("Is the capital of France Paris?") benefit from high lambda — you want the most relevant result, not variety.
+- Queries that need breadth ("What should I know about Paris?") benefit from lower lambda — you want distinct angles, not three restatements of the same fact.
+- Factoid QA systems often stay near λ=0.7–0.9. Research summarization pipelines often drop to λ=0.4–0.6.
+
+Like chunk size, lambda is something you tune against real query logs, not something you set once and forget.
+
+## Recall
+
+<RecallPrompt
+  concept="top-k-retrieval"
+  question="A colleague says 'just set K=10, more is always better.' Explain why that's wrong, using the precision-recall tradeoff and a concrete example of what goes wrong with large K in a 4096-token context window."
+/>
+
+<RecallPrompt
+  concept="relevance-diversity-tradeoff"
+  question="Describe a real-world corpus where pure top-K retrieval would consistently waste your retrieval budget on redundant chunks. What property of that corpus causes the problem?"
+/>
+
+<RecallPrompt
+  concept="mmr"
+  question="Walk through the MMR formula for a second selection step. You've already selected doc A. Candidate docs B and C both have relevance score 0.8 to the query. Doc B has similarity 0.9 to A; doc C has similarity 0.1 to A. At λ=0.5, which doc does MMR pick, and why?"
+/>
+
+<RecallPrompt
+  concept="cosine-similarity"
+  question="In the top-K sim, off-topic documents (Tokyo, Python) still have non-zero cosine similarity to the query 'Tell me about Paris.' Why? What does this reveal about bag-of-words cosine similarity, and how do real embeddings change this?"
+/>
+
+<RecallPrompt
+  concept="chunk-retrieval-impact"
+  question="You learned in the Chunking chapter that chunk size affects retrieval precision. Now layer in top-K: if your chunk size is too large and your K is also large, how do the two problems compound? What does the retrieved context actually look like?"
+/>
