@@ -30,6 +30,50 @@
       "prerequisites": ["chunk-size", "chunk-retrieval-impact"],
       "chapter": "chunking",
       "section": "the-tradeoff"
+    },
+
+    "embedding": {
+      "title": "Vector embedding",
+      "prerequisites": [],
+      "chapter": "embeddings",
+      "section": "what-is-an-embedding"
+    },
+    "vector-space": {
+      "title": "Vector space geometry",
+      "prerequisites": ["embedding"],
+      "chapter": "embeddings",
+      "section": "the-space"
+    },
+    "cosine-similarity": {
+      "title": "Cosine similarity",
+      "prerequisites": ["vector-space"],
+      "chapter": "embeddings",
+      "section": "measuring-similarity"
+    },
+    "semantic-vs-lexical": {
+      "title": "Semantic vs lexical similarity",
+      "prerequisites": ["cosine-similarity"],
+      "chapter": "embeddings",
+      "section": "semantic-vs-lexical"
+    },
+
+    "top-k-retrieval": {
+      "title": "Top-K retrieval",
+      "prerequisites": ["cosine-similarity", "chunk-retrieval-impact"],
+      "chapter": "retrieval",
+      "section": "the-top-k-primitive"
+    },
+    "relevance-diversity-tradeoff": {
+      "title": "Relevance vs diversity",
+      "prerequisites": ["top-k-retrieval"],
+      "chapter": "retrieval",
+      "section": "the-redundancy-problem"
+    },
+    "mmr": {
+      "title": "Maximal Marginal Relevance (MMR)",
+      "prerequisites": ["relevance-diversity-tradeoff"],
+      "chapter": "retrieval",
+      "section": "mmr"
     }
   }
 }

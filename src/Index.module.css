@@ -1,0 +1,24 @@
+.intro { color: #4b5563; margin-bottom: 2rem; }
+.list { list-style: none; padding: 0; margin: 0; }
+.item {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  transition: border-color 0.15s;
+}
+.item:hover { border-color: #2563eb; }
+.link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  text-decoration: none;
+  color: #111827;
+}
+.order {
+  font-family: monospace;
+  color: #9ca3af;
+  font-size: 0.9em;
+}
+.title { font-size: 1.25rem; font-weight: 600; }
+.blurb { color: #4b5563; margin: 0.4rem 0 0; font-size: 0.95em; }
