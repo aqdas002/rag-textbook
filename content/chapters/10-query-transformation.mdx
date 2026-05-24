@@ -1,0 +1,508 @@
+---
+id: query-transformation
+title: Query transformation
+estimatedMinutes: 25
+concepts: [query-rewriting, hyde, sub-query-fusion, query-routing]
+prerequisites: [embedding, top-k-retrieval, reciprocal-rank-fusion]
+---
+
+import { HyDEvsRaw } from '@sims/HyDEvsRaw'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## The query is the wrong input
+
+The previous chapter closed with a hard truth about production RAG: every
+component consumes latency budget, and the wrapping that makes a pipeline
+observable, billable, and debuggable is as much engineering work as the
+pipeline itself. Once you have that wrapping in place — tracing, caching,
+drift detection, cost logging — you are in a position to ask a different
+class of question: not "how well does the pipeline handle this query?" but
+"is this query the right thing to feed the pipeline at all?"
+
+Every chapter so far has optimized what happens *after* the query arrives.
+Chunking, embeddings, retrieval, reranking, hybrid search, evals, GraphRAG,
+agentic loops, and production hardening: all of it assumes the query enters
+the retrieval system as the user typed it. That assumption is frequently
+wrong.
+
+Queries and answers inhabit different vocabulary. A user writes "why is my
+Postgres query slow" — question vocabulary, conversational, vague. The
+document that contains the answer is written in answer vocabulary: "sequential
+scan," "B-tree index," "EXPLAIN ANALYZE." The embedding model was trained on
+documents, not questions. When you embed the user's question, you land in a
+part of vector space that is sparsely populated by your documents. The
+retriever finds things near the question; the answer is near the answer.
+
+Users are often vague, ambiguous, or under-specified. "The bug from
+yesterday" makes sense to the user and is nearly meaningless to a retrieval
+system. A single query may be multi-faceted — "what should I know about
+database indexing?" wants information from six different documents, not the
+top-1 closest chunk.
+
+This chapter covers four techniques that address these failure modes by
+transforming the query before it ever reaches the retriever:
+
+- **Query rewriting** — use an LLM to fix, expand, or normalize the query
+- **HyDE** — embed a hypothetical answer instead of the question
+- **Sub-query fusion** — generate multiple query variants, retrieve for each, merge with RRF
+- **Query routing** — classify query intent and dispatch to the right pipeline
+
+These four techniques share a common ancestor: an LLM call sits in front of
+retrieval, transforming the input. The cost is real — an extra LLM call per
+query, added latency, added dollars. The wins are sometimes dramatic and
+sometimes negligible. Neither the wins nor the costs are uniform across
+query types. The job of this chapter is to give you the conceptual tools to
+know when each technique earns its keep.
+
+## Rewriting the query
+
+The simplest form of query transformation: take what the user wrote, pass it
+through an LLM, and retrieve against the improved version instead.
+
+The mechanism is straightforward. You write a system prompt: "You are a
+search assistant. Improve the following query for retrieval against technical
+documentation. Return only the improved query, no explanation." You pass the
+user query as user input. You retrieve against the LLM's output. One extra
+LLM call; typically 150-400ms added latency.
+
+What the rewriting actually does depends on which pattern you apply.
+
+**Spelling and grammar normalization** is the cheapest and smallest win.
+Fix typos, expand contractions, normalize punctuation. "how do i conect to
+databse" becomes "how do I connect to the database." Useful at the long tail
+of mobile and voice input where users are not proofreading. The improvement
+is usually minor — embedding models are moderately robust to spelling — but
+in exact-match BM25 pipelines, typo normalization can rescue queries that
+would otherwise miss entirely.
+
+**Expansion** takes a vague or underspecified query and produces a longer,
+more specific version. "the bug from yesterday" becomes "the authentication
+bug reported on 2026-05-23 in the auth-service repository." This requires
+some context — conversation history, user metadata, session context — that
+you inject into the rewriting prompt. The gain can be large when the
+original query lacks the terms that appear in the target documents. The risk
+is hallucination: the LLM may expand toward plausible specifics that are
+wrong, sending retrieval in the wrong direction.
+
+**Multi-query generation** asks the LLM to generate 3-5 distinct phrasings
+or angles on the same underlying question. "Why is authentication failing?"
+might expand to: "authentication failure root causes," "JWT token validation
+errors," "session expiration causing login issues," "OAuth misconfiguration
+signs." You embed each variant, retrieve the top-K for each, and merge the
+resulting ranked lists with RRF. This is sub-query fusion applied to
+paraphrase diversity — covered in more depth in the routing and fusion
+section below.
+
+**Decomposition** breaks a complex composite query into atomic sub-questions.
+"Compare PostgreSQL and MySQL for a high-write e-commerce workload, and
+explain the tradeoffs" decomposes into: "PostgreSQL write performance
+characteristics," "MySQL write performance characteristics," "comparison of
+PostgreSQL and MySQL for high-write workloads," "database choice for
+e-commerce." Each sub-question retrieves independently; results are merged
+before generation. This overlaps substantially with the query decomposition
+pattern from the agentic RAG chapter — the difference is that the agentic
+version reruns retrieval in a loop, while decomposition-based rewriting does
+it as a one-shot parallel fan-out.
+
+The cost of query rewriting is one extra LLM call per query. At Claude Haiku
+rates — the right tier for this task, since the rewriting job is small, fast,
+and cheap — that runs roughly $0.0003-0.001 added cost and 150-400ms added
+latency. The decision of whether to add rewriting should be driven by your
+query distribution: are your users writing queries messy enough to justify
+the investment? Consumer-facing chat with mobile and voice input almost always
+benefits. Internal knowledge bots used by engineers typing precise queries
+often do not.
+
+## Embed the answer, not the question
+
+In 2022, Luyu Gao and colleagues at Carnegie Mellon published "Precise Zero-
+Shot Dense Retrieval without Relevance Labels" — commonly cited as the HyDE
+paper. The core idea is counterintuitive enough that it is worth stating
+precisely before explaining why it works.
+
+**The HyDE procedure:**
+
+1. Take the user query as-is.
+2. Ask an LLM to generate a *hypothetical answer* to the query — a plausible
+   document that would contain the answer, written in the declarative style
+   of your corpus.
+3. Embed the hypothetical answer, not the original query.
+4. Retrieve the nearest real documents to the hypothetical answer's embedding.
+5. Return those real documents to the LLM for grounded generation.
+
+The hypothetical answer may be factually wrong. The LLM is hallucinating —
+it does not have access to your knowledge base. That is fine. The hypothetical
+answer does not need to be correct. It needs to be in the right vocabulary.
+
+Here is why this works. Embedding models are trained predominantly on
+document-to-document and document-to-passage similarity — they learn to
+place documents that discuss the same topics near each other. Questions and
+answers use systematically different vocabulary even when they cover the same
+topic. A question says "why is my query slow"; an answer says "sequential
+scan," "index," "EXPLAIN ANALYZE." A question says "how do I do X"; an answer
+describes X declaratively in present tense with technical terms.
+
+When you embed a question, you land in a region of vector space that is
+sparsely occupied by your document corpus — questions and documents simply
+do not cluster together. When you embed a hypothetical answer written in
+answer vocabulary, you land near the real documents that contain the actual
+answer. The retriever finds the right documents, even though the hypothetical
+answer that pointed to them was fabricated.
+
+Before you see this in action, make a prediction.
+
+<PredictGate
+  concept="hyde"
+  question="The sim below has three queries: a technical Postgres question, a password reset question, and a warranty lookup for a specific SKU. Before unlocking the sim, predict: which of these three queries do you expect HyDE to help the most? Which do you expect it to help the least — or not at all? Why?"
+  hint="Think about the vocabulary gap between how the query is written and how the answer is likely written in the document. Where is that gap largest? Where is it smallest or nonexistent?"
+>
+  <HyDEvsRaw />
+</PredictGate>
+
+Let's walk through all three queries and integrate what the sim shows.
+
+**Postgres slow query (rank 3 to rank 1): HyDE is a big win.** The user's
+question uses conversational vocabulary: "slow," "large join," "Postgres
+query." The correct document uses answer vocabulary: "sequential scan,"
+"B-tree index," "EXPLAIN ANALYZE," "Seq Scan node." Without HyDE, raw
+retrieval embeds the question — which lands far from the answer-style
+document and closer to generic performance advice. The correct document
+appears at rank 3. With HyDE, the LLM generates a hypothetical answer that
+uses the precise technical terms of the answer space. Embedding that
+hypothetical answer lands near the real document. The correct answer jumps
+to rank 1. The vocabulary gap is the entire mechanism.
+
+**Password reset (rank 2 to rank 1): HyDE is a modest win.** The question
+"How do I reset my password?" and the correct document ("To reset your
+password, go to the login page, click 'Forgot password'...") share a lot of
+vocabulary. "Password," "reset," "login" appear in both. The vocabulary gap
+is small. Raw retrieval gets the right document at rank 2 — not perfect, but
+close. HyDE pushes it to rank 1 by generating a hypothetical answer that
+more closely mirrors the document's phrasing. The improvement exists but is
+smaller because the original question was already reasonably well-formed for
+retrieval.
+
+**SKU warranty lookup (rank 1 to rank 1): HyDE adds cost with no benefit.**
+The query "What is the warranty period for SKU XR-7700-B?" already contains
+the dominant signal: the exact SKU identifier XR-7700-B. That identifier
+appears in exactly one place in the corpus — the correct chunk. Both raw
+retrieval and HyDE find it at rank 1. The vocabulary gap is zero because the
+query already contains the key term that distinguishes the right document.
+HyDE still costs +$0.001 per query and +400ms of latency. You paid the tax
+and got nothing for it.
+
+The pattern across these three cases is the lesson. HyDE is a tool, not a
+universal upgrade. Use it when your queries and answers are in different
+language registers: technical Q&A over documentation, customer support
+questions over knowledge bases, jargon-heavy domains where users ask
+colloquially and documents speak technically. Skip it when your queries
+already contain the keywords likely to appear in the answer — identifier
+lookups, fact lookups with specific names or codes, queries where the user
+is already speaking the document's language. And always account for the
+fixed cost it adds to every query it touches.
+
+## Routing and fusion
+
+Two patterns complete the query transformation toolkit.
+
+### Sub-query fusion
+
+Sub-query fusion applies RRF — which you learned in the hybrid search chapter
+as a way to merge BM25 and dense rankings — to a different kind of mixture:
+multiple retrievals of the same information domain, initiated from different
+query phrasings.
+
+The procedure: ask an LLM to generate N distinct variants of the original
+query (typically N=3 to N=5). Each variant captures a different angle,
+vocabulary set, or decomposed sub-aspect of the original question. Embed each
+variant, retrieve the top-K for each in parallel, then RRF-merge the N ranked
+lists into a single ranking and take the top-K from that merged result.
+
+The intuition: different phrasings retrieve different subsets of the relevant
+document space. "Database indexing strategies" retrieves things that use
+"indexing." "How to speed up database queries" retrieves things that use
+"performance," "optimization," "slow queries." "B-tree vs hash index
+tradeoffs" retrieves things with that specific vocabulary. None of these
+alone retrieves everything relevant; together, with RRF-merging, they cover
+the space much more completely than any single query.
+
+Sub-query fusion earns its keep for synthesis-style queries: "what should I
+know about X?", "compare A and B," "summarize the state of Y." These are
+inherently multi-faceted questions where a single query cannot express all
+the relevant angles. For narrow factoid queries — "what is the return
+window?", "what version is the API?" — it adds cost with no benefit. The
+correct document matches the direct query well enough; generating 4 variants
+just retrieves that same document four times before RRF-merging it back to
+rank 1.
+
+The cost of sub-query fusion: one LLM call to generate the N variants,
+N retrieval calls that can run concurrently, one RRF merge step. Because the
+N retrievals run in parallel, the added wall-clock latency is roughly one
+LLM call plus one retrieval call — around 200-400ms added latency. The added
+per-query cost is approximately $0.001 for the variant-generation call.
+
+### Query routing
+
+Routing is not a way to improve a single query — it is a way to make the
+whole system cost-effective by ensuring that different query types get
+processed by the right pipeline rather than the most expensive one.
+
+The insight: most production query streams are not uniform. A customer
+support product might see 70% simple factoid queries ("how do I reset my
+password?"), 20% exploratory queries ("what are my options for X?"), and
+10% complex comparison queries ("what's the tradeoff between A and B?"). If
+you route all of these through the same agentic pipeline optimized for the
+10%, you pay agentic costs on the 90% that do not need it.
+
+A query router classifies incoming queries by intent and dispatches each to
+the appropriate downstream pipeline:
+
+```
+user query → [query router (intent classification)] →
+  ├── simple factoid → [vanilla RAG] → LLM
+  ├── jargon-heavy Q&A → [HyDE → dense retrieval] → LLM
+  ├── multi-faceted / synthesis → [sub-query fusion (LLM gen + N retrievals + RRF)] → LLM
+  └── complex / comparison → [agentic loop (chapter 8)] → LLM
+```
+
+This is the full picture of a mature RAG system. Every optimization covered
+across this module lives inside one of those four downstream branches. The
+router is what makes them all coexist economically.
+
+Chunking, embeddings, retrieval, reranking, hybrid search — these are the
+retrieval primitives, inside each branch. Evals and production observability
+wrap the whole system. GraphRAG and agentic loops live in the complex branch.
+Query transformation is the routing and pre-processing layer that ensures
+the right primitive is invoked for the right query type.
+
+The routing layer costs approximately $0.0001 and adds 50-150ms. That small
+cost frequently saves the full cost of an agentic loop invocation on the
+queries that do not need it. The routing layer is also the multiplier for
+every other technique in this chapter: once you have routing, rewriting, HyDE,
+and sub-query fusion become selective tools applied only where they demonstrate
+lift, rather than taxes paid on every query.
+
+## In practice
+
+The previous sections gave you the mechanism. This one covers the numbers,
+the frameworks, the research results, and the failure modes that working
+engineers encounter when these techniques meet production traffic.
+
+### The actual cost of query transformation
+
+Each technique adds an LLM call. At Claude Haiku rates — the right tier for
+query transformation tasks, since they require small, fast, cheap calls, not
+synthesis — the approximate costs are:
+
+| Technique | Added LLM calls | Added latency | Added cost per query |
+|---|---|---|---|
+| Query rewriting (normalization / expansion) | 1 | ~150ms | ~$0.0003 |
+| HyDE (generate hypothetical answer) | 1 (more output tokens) | ~400ms | ~$0.001 |
+| Sub-query fusion (N=3 variants) | 1 generation + 3 parallel retrievals | ~200ms | ~$0.001 |
+| Query routing (intent classification) | 1 (small input, tiny output) | ~50ms | ~$0.0001 |
+
+These costs compound if you stack them. A pipeline that applies rewriting,
+then HyDE, then sub-query fusion, then routing has added roughly $0.0023 and
+800ms to every query before a single retrieval call runs. At 10 QPS, that
+is approximately $2,000/day in transformation overhead — before the downstream
+pipeline costs. Pick the technique with the highest expected lift on your
+specific query distribution. Do not stack them because they each provide lift
+individually; measure whether the combination justifies the combined cost.
+
+### When each technique wins
+
+Different query types respond to different transformations:
+
+**Query rewriting** wins when users write messy queries. Mobile input, voice
+transcription, casual chat phrasing, non-native speaker text — all of these
+create queries with typos, grammatical ambiguity, and missing context. Consumer-
+facing and customer-support products benefit the most. Internal tools used by
+engineers writing precise queries benefit the least.
+
+**HyDE** wins when query and answer vocabulary differ systematically.
+Technical Q&A ("why is my Postgres query slow?" maps to "sequential scan,"
+"B-tree index"), customer support over documentation ("how do I export my
+data?" maps to "data export," "CSV download," "bulk export API"), and jargon-
+heavy domains where users speak colloquially and documents speak technically.
+HyDE is less useful for documentation lookups where queries already use the
+document's vocabulary, and nearly useless for identifier-based lookups where
+the query already contains the distinguishing term.
+
+**Sub-query fusion** wins when queries are multi-faceted or open-ended.
+"What should I know about X?", "Compare A and B," "Summarize the tradeoffs
+around Y" — these synthesis-style queries cannot be fully expressed in a
+single embedding. Generating N phrasings and merging gives you coverage
+across the relevant document space. It is less useful for narrow factoid
+queries where the top-1 retrieval is already correct.
+
+**Query routing** wins when your query distribution is bimodal: a large
+fraction of simple queries and a smaller fraction of complex ones. If 80% of
+your queries are straightforward factoid lookups, routing them away from
+expensive pipelines saves 80% of agentic costs. If your queries are uniformly
+complex, routing adds overhead without savings.
+
+### Frameworks that ship these patterns
+
+Most of these patterns are available out of the box in the major RAG
+frameworks:
+
+**LlamaIndex** ships `HyDEQueryTransform` (generates the hypothetical
+document and swaps it in for retrieval), `RouterQueryEngine` (dispatches to
+different retrieval pipelines by query type), and `MultiStepQueryEngine`
+(iterative decomposition with retrieval between steps).
+
+**LangChain** ships `MultiQueryRetriever` (generates N query variants, runs
+parallel retrievals, deduplicates results), `SelfQueryRetriever` (uses an
+LLM to rewrite the query into a structured filter expression for metadata-
+filtered retrieval — useful when your vector store supports metadata
+filtering), and `RouterChain` for query routing.
+
+**Haystack** includes a `QueryClassifier` component for routing and supports
+custom prompt nodes for rolling your own HyDE or rewriting step.
+
+That said: most production teams roll a thin custom layer on top of the
+Anthropic or OpenAI primitives rather than depend on framework-specific
+abstractions. The query transformation logic is usually 20-50 lines of code
+per technique; the framework versions are convenient but opaque about what
+prompts they use and how they fail. When a rewriting prompt fails subtly,
+you want to own the prompt.
+
+### The HyDE paper and what it actually showed
+
+Gao et al. (2022) evaluated HyDE on a suite of zero-shot retrieval benchmarks
+including BEIR's hardest out-of-domain subsets. The headline results: HyDE
+outperformed dense retrieval by 5-15 points in nDCG@10 on out-of-domain
+distributions. On in-domain benchmarks — where the embedding model had been
+trained on similar content — the lift was much smaller, often 1-3 points or
+negligible.
+
+The takeaway: HyDE's benefit is largest precisely when your queries are unlike
+your training data. This is out-of-domain retrieval, which is common in
+production: your users ask in natural language and your documents were written
+by domain experts in a different register. For corpora you control and can
+fine-tune an embedding model on, HyDE is often equivalent or slightly worse
+than just tuning the embedding model on your domain — because a domain-adapted
+embedding model learns to place questions near answers directly, instead of
+relying on hypothetical answer generation as a proxy.
+
+### Sub-query fusion and the "explainer query" pattern
+
+A common production pattern for synthesis-style queries: when a user asks
+"summarize everything about X" or "what should I know about Y?", generate 4
+semantically diverse sub-queries:
+
+- "What is X?"
+- "History and background of X"
+- "Common criticisms and failure modes of X"
+- "Comparison of X to alternatives"
+
+Retrieve the top-N for each (say N=5), giving you up to 20 candidate chunks.
+RRF-merge the four ranked lists. Take the top-10 from the merged result.
+Feed that to the LLM for synthesis.
+
+The final top-10 is diverse and covers the full topic space in a way that a
+single query for "X" never would — because a single query retrieves the most
+popular, most-linked document about X, not the most complete coverage. This
+is what the best synthesis-style RAG systems do under the hood.
+
+### The single highest-leverage query transformation trick
+
+**Add query routing first, before any of the others.**
+
+Most production query streams are 70-90% simple factoid queries that do not
+benefit from any query transformation. Route them straight to vanilla RAG.
+Only invoke HyDE, rewriting, or sub-query fusion for the queries that
+actually need it.
+
+This is the single highest-ROI move because it makes everything else above
+optional. Once you have routing:
+
+- HyDE is applied only to jargon-heavy queries where the vocabulary gap
+  exists. The 80% of simple factoid queries no longer pay the HyDE tax.
+- Sub-query fusion is applied only to synthesis-style queries where multi-
+  faceted coverage matters. The 80% of narrow factoid queries no longer run
+  3-5 retrievals to find the same document five times.
+- Query rewriting is applied only to the messy, ambiguous, short queries
+  where cleanup actually changes what gets retrieved.
+
+The routing layer costs roughly $0.0001 per query. The savings from gating
+the more expensive techniques behind it typically exceed the routing cost by
+two orders of magnitude.
+
+### The failure mode you will see in production
+
+> "We added HyDE to everything and our latency went up 400ms across the
+> board with no measurable improvement in user satisfaction."
+
+Root cause: HyDE was applied uniformly to all queries instead of gated by
+routing. The 20% of queries where HyDE provides lift got their rank
+improvement. The 80% of queries where HyDE provides no lift — identifier
+lookups, simple factoids, queries already written in answer vocabulary —
+paid +$0.001 and +400ms per query for no benefit.
+
+Compounding factor: the eval that motivated shipping HyDE was run on a
+balanced sample that overrepresented the jargon-heavy queries where HyDE
+helps. Production traffic is dominated by simple queries where HyDE does not
+help. The eval looked great; production showed no overall improvement in user
+satisfaction.
+
+Mitigation: run your HyDE evaluation segmented by query type. Measure HyDE
+lift separately for "technical how-to," "identifier lookup," "simple factoid,"
+and "exploratory" query buckets. Then add routing that invokes HyDE only for
+the types where it showed measurable lift. If you cannot segment the eval
+yet, add query routing first and tune HyDE behind it.
+
+### Where query transformation fits in the bigger system
+
+```
+user query → [query router (intent classification)] →
+  ├── simple factoid → [vanilla RAG] → LLM
+  ├── jargon-heavy Q&A → [HyDE → dense retrieval] → LLM
+  ├── multi-faceted / synthesis → [sub-query fusion (LLM gen + N retrievals + RRF)] → LLM
+  └── complex / comparison → [agentic loop (chapter 8)] → LLM
+```
+
+This is the full picture. Every pipeline chapter you have read so far —
+chunking, embeddings, retrieval, reranking, hybrid search, evals, GraphRAG,
+agentic — lives inside one of those four downstream branches. The router is
+what makes them all coexist economically.
+
+A production RAG system that applies all techniques uniformly is expensive
+and often no better than vanilla RAG on the average query. A production RAG
+system with routing that applies each technique selectively to the query types
+where it demonstrates lift is dramatically cheaper and measurably better where
+it counts. That selectivity is what separates a research prototype from a
+system you can afford to run at scale.
+
+## Recall — interview style
+
+The questions below are scenario-based: you are given a specific situation,
+constraints, and must reason from principles. There is no single right answer
+to most — what is evaluated is whether you identify the right tradeoffs,
+propose specific (not generic) actions, and flag failure modes before they
+happen.
+
+<RecallPrompt
+  concept="query-routing"
+  question="**Design choice.** You are building RAG over your company's internal engineering documentation. After analyzing a week of production queries, you find the distribution is roughly: 70% exact-keyword lookups ('how do I configure X?', 'what is the default value for Y?'), 20% exploratory queries ('what is the best practice for Z?', 'what should I consider when doing W?'), and 10% complex comparisons ('what are the tradeoffs between approach A and approach B?'). Walk through which query transformations you would add and in what order. Justify each addition by pointing to where in the distribution it has the most leverage. What does v1 look like? What does v3 look like?"
+/>
+
+<RecallPrompt
+  concept="hyde"
+  question="**Production debug.** You added HyDE to your RAG pipeline. Offline eval shows nDCG@5 improved by 3 percentage points. Latency went up 400ms at p50. User satisfaction scores are unchanged. Customer feedback consistently says 'it feels slower.' Walk through the most likely explanation for the gap between offline eval improvement and unchanged user satisfaction. What would you do next — and specifically, what would you measure before making any changes?"
+/>
+
+<RecallPrompt
+  concept="sub-query-fusion"
+  question="**Cost vs quality.** Your product team wants to ship sub-query fusion across all queries: generate 4 variants per query, retrieve in parallel, RRF-merge. You currently process 2 million queries per day. Using Claude Haiku for variant generation at approximately $0.001 per call: (a) quantify the added daily and monthly cost, (b) describe the query types where sub-query fusion is unlikely to help, and (c) propose an alternative architecture that captures most of the quality benefit at a fraction of the cost. Be specific about the routing logic."
+/>
+
+<RecallPrompt
+  concept="hyde"
+  question="**Architecture call.** Your CTO has reviewed the eval results and says: 'HyDE improved nDCG@5 by 4 points. We should just always use HyDE — it's a clear quality win.' Push back. Walk through at least three categories of queries where HyDE is the wrong choice, and explain what the eval result may be hiding about your production query distribution. What data would you want to see before agreeing to ship HyDE universally?"
+/>
+
+<RecallPrompt
+  concept="query-rewriting"
+  question="**Senior eng pushback.** A teammate proposes adding all four query transformations — rewriting, HyDE, sub-query fusion, and routing — to v1 of your RAG product before it ships. They argue: 'They are all proven wins individually; why not start with everything?' Push back on this architecture. What is the right minimum-viable query transformation layer for v1? What do you ship first, what do you defer to v2, and how do you use production data to decide what comes next?"
+/>
