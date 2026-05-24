@@ -1,0 +1,223 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.query {
+  margin: 0 0 1rem;
+  font-size: 0.95em;
+  color: #111827;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Ranked list */
+.rankedList {
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: 0 0 0.5rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #374151;
+}
+
+.docRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: white;
+  margin: 0.2rem 0;
+  font-size: 0.82em;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.docRow.inTopK {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+}
+
+.docRow.belowK {
+  opacity: 0.65;
+}
+
+.docRow.relevant .rankBadge {
+  background: #059669;
+}
+
+.rankBadge {
+  background: #6b7280;
+  color: white;
+  border-radius: 999px;
+  padding: 0.1em 0.45em;
+  font-size: 0.78em;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 2em;
+  text-align: center;
+}
+
+.docText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #374151;
+}
+
+.scoreChip {
+  background: #e5e7eb;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-family: monospace;
+  font-size: 0.78em;
+  flex-shrink: 0;
+  color: #4b5563;
+}
+
+.toggleLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  flex-shrink: 0;
+  cursor: pointer;
+  font-size: 0.82em;
+  color: #4b5563;
+  user-select: none;
+}
+
+.toggleLabel input[type='checkbox'] {
+  cursor: pointer;
+}
+
+.hint {
+  font-size: 0.75em;
+  color: #9ca3af;
+  margin: 0.4rem 0 0;
+}
+
+/* Metrics panel */
+.metricsPanel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.sliderLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.88em;
+}
+
+.sliderLabel input[type='range'] {
+  flex: 1;
+}
+
+.metricsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.metricCard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+}
+
+.metricHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.metricName {
+  font-size: 0.82em;
+  font-weight: 700;
+  color: #111827;
+}
+
+.metricValue {
+  font-size: 1.05em;
+  font-weight: 700;
+  font-family: monospace;
+  color: #111827;
+}
+
+.metricExplain {
+  font-size: 0.72em;
+  color: #6b7280;
+  margin: 0.15rem 0 0.35rem;
+  font-style: italic;
+}
+
+.metricBar {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.metricFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.summary {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78em;
+  color: #6b7280;
+  margin: 0.6rem 0 0.5rem;
+  padding: 0 0.1rem;
+}
+
+/* Intuition panel */
+.intuitionPanel {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.intuitionTitle {
+  font-size: 0.8em;
+  font-weight: 700;
+  color: #92400e;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.intuitionText {
+  font-size: 0.8em;
+  color: #78350f;
+  margin: 0;
+  line-height: 1.45;
+}
