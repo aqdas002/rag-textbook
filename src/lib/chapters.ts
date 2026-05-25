@@ -79,6 +79,27 @@ export const chapters: ChapterMeta[] = [
     blurb: 'When the user query is not the right query to embed. Rewriting, HyDE, sub-query fusion, and routing.',
     Component: lazy(() => import('../../content/chapters/10-query-transformation.mdx')),
   },
+  {
+    id: 'tool-use',
+    title: 'Tool use',
+    order: 11,
+    blurb: 'The primitive every agent rests on. Function calling, tool schemas, when the LLM picks the wrong tool, and parallel calls.',
+    Component: lazy(() => import('../../content/chapters/11-tool-use.mdx')),
+  },
+  {
+    id: 'structured-outputs',
+    title: 'Structured outputs',
+    order: 12,
+    blurb: 'When you need the LLM to fill out a form, not write prose. Schemas as contracts, strictness modes, and what to do when validation fails.',
+    Component: lazy(() => import('../../content/chapters/12-structured-outputs.mdx')),
+  },
+  {
+    id: 'react-general',
+    title: 'ReAct (general)',
+    order: 13,
+    blurb: 'The Thought-Action-Observation loop beyond retrieval. CoT vs ReAct, planning vs reactive, knowing when to stop.',
+    Component: lazy(() => import('../../content/chapters/13-react-general.mdx')),
+  },
 ];
 
 export function getChapter(id: string): ChapterMeta | undefined {

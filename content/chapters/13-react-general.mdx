@@ -1,0 +1,171 @@
+---
+id: react-general
+title: ReAct (general)
+estimatedMinutes: 25
+concepts: [react-general, cot-vs-react, agent-stop-conditions, planning-vs-reactive]
+prerequisites: [react-loop, function-calling]
+---
+
+import { CoTvsReAct } from '@sims/CoTvsReAct'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## From structured outputs to general reasoning loops
+
+Chapter 12 ended with the LLM as a typed function — fill out a schema, return structured data. Chapter 8 introduced ReAct as the answer to multi-hop RAG questions. This chapter generalizes ReAct out of the RAG context: the same Thought-Action-Observation loop works for math, code, planning, scheduling, debugging — anything where intermediate state can be verified against an external source.
+
+The key property is **verifiable intermediate state**. Math has a calculator. Dates have a date library. Code has a sandbox. Facts have a search engine. The model does not need to be right about anything in isolation — it needs to be right about *what to check next*. That property is what separates the problems where ReAct dominates from the problems where chain-of-thought is already enough.
+
+## ReAct as a general pattern
+
+In its most general form, ReAct is an architecture, not a prompt technique. The structure is the same regardless of domain:
+
+```
+Thought → Action → Observation → Thought → Action → Observation → ... → Final Answer
+```
+
+What changes across domains is the action space. For RAG it was `search()` and `lookup()`. For an arithmetic agent it might be `calculator(expression)` and `convert_units(from, to, value)`. For a coding agent it might be `execute_python(code)` and `read_file(path)`. For a scheduling agent: `get_calendar(date)` and `book_meeting(participants, time)`.
+
+The pattern works whenever (a) the problem has a well-defined goal, (b) progress toward the goal can be decomposed into discrete checkable steps, and (c) there exists at least one tool whose output is more reliable than the model's internal reasoning about the same question. If those three things are true, ReAct beats chain-of-thought. If any are missing, it doesn't.
+
+Three concrete domains where ReAct is the right architecture:
+
+- **Math and unit conversions.** A calculator is more reliable than LLM arithmetic. Every multiplication, every division, every unit conversion is a candidate Action.
+- **Multi-step lookups.** Where the answer requires combining facts that no single document contains. Each search is an Action; each result grounds the next Thought.
+- **Code with test feedback.** The agent writes code, runs it, reads the output (or error), and revises. The test runner is the Observation. This is the architecture behind Cursor's agent mode and similar coding tools.
+
+Three domains where ReAct is the wrong architecture:
+
+- **Pure prose generation** (creative writing, summarization). No external verifier; ReAct adds overhead without grounding.
+- **Single-shot classification.** A direct prompt is faster and cheaper than a loop.
+- **Real-time response** (chat with latency budget under 1s). Each ReAct iteration adds an LLM round-trip; the budget evaporates.
+
+## Chain-of-thought vs ReAct
+
+Chain-of-thought (CoT), introduced by Wei et al. in 2022, showed that asking LLMs to "think step by step" dramatically improved performance on multi-step reasoning. CoT is a prompting technique — it adds reasoning tokens before the final answer but does not let the model take actions or check external sources. All thinking happens inside the model's head.
+
+ReAct (Yao et al., 2022) added the missing piece. At each thought step, the model can take an Action and read its Observation before producing the next Thought. The result: thoughts can be wrong about intermediate facts, but the next observation will correct them. CoT cannot self-correct because there is nothing to correct against.
+
+Before running the sim, predict.
+
+<PredictGate
+  concept="cot-vs-react"
+  question="The sim has 3 problems: a discounted-jacket math question, a 90-day trial date calculation, and a multi-step Wikipedia lookup. Before unlocking: predict which of the 3 problems CoT will fail on, and why. What property of the problem determines whether CoT or ReAct wins?"
+  hint="Think about which problems have verifiable intermediate state — places where the model's intermediate work can be checked against something outside the model."
+>
+  <CoTvsReAct />
+</PredictGate>
+
+**What the sim shows.** CoT gets all three problems wrong. ReAct gets all three right. The failure modes are different but the root cause is the same — CoT commits to intermediate results that no external source ever verifies, and downstream steps build on those errors.
+
+- **Jacket pricing.** CoT collapses "35% off plus 15% off" into "50% off" — a common arithmetic shortcut that's wrong because discounts compound multiplicatively, not additively. ReAct's calculator catches it at the first multiplication: `1200 × 0.65 = 780`, then `780 × 0.85 = 663`. Each step is verified.
+- **90-day trial date.** CoT does its own day counting and makes an off-by-one error somewhere in the month math. ReAct calls a `date_calculator` tool that returns the exact date, no counting needed.
+- **Multi-step lookup.** CoT confidently produces a population-density number it never looked up. ReAct searches at each step and grounds the final answer in the actual retrieved figure.
+
+**The takeaway.** CoT is a prompting technique — useful when the problem is pure reasoning over facts the model already knows. ReAct is an architecture — useful when there's external state worth checking. They are not competing approaches at the same layer. They serve different problem shapes.
+
+The cost difference is real. ReAct typically costs 3-4x what a CoT call costs for the same problem (more LLM calls, more tokens in context across rounds). For problems where CoT is already correct, that cost is wasted. For problems where CoT silently fails, it's the only path that produces a trustworthy answer.
+
+## Planning vs reactive
+
+ReAct is reactive by default — at each step, the model decides the next action based only on the current state. Each step is myopic. This is the right pattern for exploratory problems where you genuinely don't know what step 5 needs until you've seen step 4. Research, debugging, drill-down analytics — all reactive.
+
+But many production agent workloads have a different shape: the steps are predictable. A "generate the Q3 analytics report" task always pulls the same metrics from the same dashboards in the same order. For these, planning first is more efficient.
+
+Three patterns sit on this spectrum:
+
+- **Reactive ReAct.** No planning. Decide next action at every step. Best for exploratory tasks.
+- **Plan-first agents.** Generate a complete plan upfront ("step 1: lookup X, step 2: compute Y, step 3: lookup Z based on Y, step 4: synthesize"), then execute it sequentially. Best for predictable-shape tasks. The plan is itself a structured output (chapter 12 territory).
+- **Plan-and-execute hybrid.** Plan first, then execute, but allow re-planning when an observation invalidates the plan. This is what LangGraph, AutoGen, and most production agent frameworks have converged on. It captures both the efficiency of upfront planning and the resilience of reactive correction.
+
+The hybrid is the default in 2026 because production workloads are rarely purely one or the other. A customer-support agent has both predictable flows (look up the user's account, check their last 3 tickets) and exploratory flows (the user's question is unusual, need to dig). One framework, two execution modes.
+
+## Knowing when to stop
+
+The hardest part of running ReAct in production is not getting the model to take useful actions — it's knowing when it has taken enough. Without an explicit stop condition, agents over-iterate (cost), drift off-topic (irrelevant subproblems), or stop too early (incomplete answers).
+
+Three stop-condition patterns, in order of how much they help:
+
+- **Step limit.** Hard cap on iterations. Framework defaults are 10-20; production teams typically tighten to 5-7. This is a backstop, not a strategy — hitting it usually means the model went off the rails. Alert on step-limit-hit rate > 5%.
+- **Self-reflection stop.** After each step, the agent reflects: "Do I have enough information to answer? If yes, stop." Adds one LLM call per step but cuts total steps by 30-50% on typical workloads. The single highest-leverage trick for cost control in agentic systems (carried over from chapter 8).
+- **Confidence-based stop.** The agent outputs a confidence score with each candidate final answer; stop when confidence > threshold. Less commonly used because LLMs are poorly calibrated — a model can be confidently wrong, and the threshold tuning is fragile.
+
+What most production teams ship is **all three together**: step limit (hard ceiling), self-reflection stop (soft ceiling that fires first 95% of the time), and a per-query cost cap (back-stop against runaway costs). Belt, suspenders, and a second belt. The combined overhead is small; the protection against tail-cost outliers is large.
+
+## In practice
+
+### What the ReAct paper actually claimed
+
+Yao et al. (2022) evaluated on HotpotQA (multi-hop QA), Fever (fact verification), and ALFWorld/WebShop (interactive environments). ReAct beat CoT-only and Act-only baselines on all four. Strongest gains came from tasks requiring external lookups; smallest gains came from pure-reasoning tasks where there was nothing external to verify against. The paper's central observation: thoughts let the model "reason about" actions, and actions let the model "ground" thoughts. Neither alone works as well as the interleaving.
+
+### CoT silently fails in production
+
+Most production "agent" or "RAG" systems are actually just CoT in disguise — a single LLM call with a thinking prompt. They ship with hidden quality cliffs that only show up at scale. Symptoms: confident-sounding wrong answers, arithmetic errors in calculations, hallucinated facts about recent events. The diagnostic: if you cannot verify the model's intermediate work, you cannot trust the final answer. Add a calculator tool, a search tool, a date library — any tool that grounds intermediate state — and quality jumps.
+
+### The cost-quality curve
+
+ReAct costs about 3-4x what CoT costs for the same problem on a typical 3-step loop. The quality lift varies dramatically by problem type: marginal on problems CoT already solves (single-fact lookups), transformative on problems CoT silently fails (multi-step arithmetic, multi-hop facts, anything requiring external verification). Decision rule: use ReAct when you have actions worth taking; use CoT when the problem is pure reasoning over known facts. The router (chapter 10) is where this routing happens.
+
+### Self-consistency on top of ReAct
+
+A common stack for high-stakes decisions: run ReAct N times (typically 3-5) at non-zero temperature, then vote on the final answer. Improves correctness when individual runs vary. Cost is N×. Used in medical triage prototypes, financial summarization, regulatory compliance — anywhere a single wrong answer is catastrophic. Rarely used in consumer chat where N× cost is unsustainable and one wrong answer is recoverable.
+
+### Tool use within ReAct
+
+Every Action in a ReAct loop is a tool call. Everything from chapter 11 applies: good schemas help the model pick the right action; the 20-tool rule limits how many actions you should expose at once; parallel tool calls work inside ReAct (rare but useful when two independent observations are needed at the same step). The ReAct loop is the orchestration layer; tool-use is the primitive.
+
+### The single highest-leverage ReAct trick
+
+**Make actions specific, not generic.** A bad action: `execute_code(code)` that takes arbitrary Python. A good action: `calculator(expression)` for math, `date_calculator(op, date, n, unit)` for dates, `search(query)` for facts. Specific tools constrain the action space and dramatically reduce the chance of the LLM doing something unexpected. The total expressiveness is the same — calculator does math, date_calculator does dates, search does facts — but each individual call is constrained to a single purpose. The model picks better when the choices are well-defined.
+
+### The failure mode you will see in production
+
+> "Our agent works on simple problems but loses coherence on complex queries — by step 7 it's solving an irrelevant subproblem."
+
+Three common causes:
+
+1. **No self-reflection stop.** The agent keeps going past the right answer because nothing told it to stop.
+2. **Context growth without summarization.** Each Thought-Action-Observation cycle accumulates in the context window. By step 7, the original goal is buried under intermediate observations.
+3. **Tool descriptions encouraged exploration.** "search broadly" in a tool description makes the model wander; "search for the specific fact needed to answer" keeps it focused.
+
+Mitigations: shorter step limits, mandatory self-reflection stop, periodic context summarization mid-loop (every 3-4 steps, re-summarize what's been learned and discard intermediate observations).
+
+### Where ReAct fits in the bigger system
+
+```
+query → [query router (ch 10)] →
+  ├── simple → CoT or direct LLM call
+  └── complex → ReAct loop:
+        Thought (LLM) → Action (tool call) → Observation (tool result) →
+        [self-reflection: stop?] → Thought → ... → Final Answer
+                                              ↓
+                                       [step limit + cost cap as backstops]
+```
+
+The query router decides whether ReAct is the right architecture for the query — for simple queries, vanilla RAG or a single LLM call is faster and cheaper. ReAct is the heavy path; route to it deliberately, not by default.
+
+## Recall — interview style
+
+<RecallPrompt
+  concept="planning-vs-reactive"
+  question="**Design choice.** You're building an analytics agent for product managers. Half the queries are predictable-shape ('what was MAU for the last 6 months?'), half are exploratory ('why did churn spike in March?'). Walk through whether you'd build with plan-first, reactive ReAct, or the hybrid. Justify per query type and describe how the router would decide which mode to use."
+/>
+
+<RecallPrompt
+  concept="agent-stop-conditions"
+  question="**Production debug.** Your ReAct agent's step-limit-hit rate jumped from 5% to 30% last week. No code changes. Walk through diagnosis — what's the most likely cause and what's the first thing you check? What three signals would help you isolate the root cause?"
+/>
+
+<RecallPrompt
+  concept="react-general"
+  question="**Cost vs quality.** A teammate proposes adding self-consistency (run ReAct 5 times, vote) to your customer-support agent. Cost would 5x. Walk through whether you'd ship it as proposed, what alternative configurations you'd consider, and what conditions would justify the full 5x cost."
+/>
+
+<RecallPrompt
+  concept="cot-vs-react"
+  question="**Senior eng pushback.** A junior eng proposes replacing all your team's CoT pipelines with ReAct because 'it's strictly better — it grounds in reality.' Push back. Name two concrete problem types where CoT is the right choice and ReAct is wasted overhead. What's the criterion that distinguishes the two?"
+/>
+
+<RecallPrompt
+  concept="agent-stop-conditions"
+  question="**Failure-mode trace.** Your agent loses coherence on multi-step queries — by step 6 it's solving an irrelevant subproblem and the original goal has drifted. Walk through what went wrong architecturally. Propose three concrete fixes and describe what each one targets."
+/>

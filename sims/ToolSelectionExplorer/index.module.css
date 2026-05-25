@@ -1,0 +1,49 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+.qualityRow { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+.label { font-weight: 600; color: #374151; }
+.toggle, .toggleActive {
+  padding: 0.3rem 0.9rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9em;
+}
+.toggleActive { background: #1e3a8a; color: white; border-color: #1e3a8a; }
+.panes { display: grid; grid-template-columns: 1fr 1.3fr; gap: 1rem; }
+@media (max-width: 800px) { .panes { grid-template-columns: 1fr; } }
+.toolboxPane, .resultPane { background: #f9fafb; padding: 0.75rem; border-radius: 4px; }
+.toolboxPane h4, .resultPane h4 { margin: 0 0 0.5rem; font-size: 0.95em; color: #374151; }
+.toolCard { background: white; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
+.toolName { font-family: monospace; font-weight: 700; color: #1e3a8a; font-size: 0.9em; }
+.toolDesc { font-size: 0.85em; color: #4b5563; margin: 0.2rem 0; }
+.toolParams { font-family: monospace; font-size: 0.75em; color: #6b7280; }
+.querySelector { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; }
+.queryButton, .queryActive {
+  text-align: left;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85em;
+}
+.queryActive { background: #eff6ff; border-color: #3b82f6; }
+.queryText { font-family: monospace; background: white; border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.4rem 0; font-size: 0.9em; }
+.reasoning { background: white; border-left: 3px solid #6366f1; padding: 0.5rem 0.75rem; font-size: 0.9em; color: #4b5563; font-style: italic; margin-bottom: 0.75rem; }
+.toolCall { background: white; border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.25rem 0; }
+.toolCall code { font-size: 0.85em; color: #1f2937; }
+.noCalls { color: #6b7280; font-style: italic; font-size: 0.9em; }
+.outcomeRow { display: flex; align-items: baseline; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
+.outcome { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.85em; font-weight: 600; }
+.outcomeGood { background: #d1fae5; color: #047857; }
+.outcomeBad { background: #fee2e2; color: #b91c1c; }
+.outcomeNote { font-size: 0.85em; color: #4b5563; }

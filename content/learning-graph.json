@@ -279,6 +279,81 @@
       "prerequisites": ["query-rewriting"],
       "chapter": "query-transformation",
       "section": "routing-by-intent"
+    },
+
+    "function-calling": {
+      "title": "Function calling (tool definitions)",
+      "prerequisites": [],
+      "chapter": "tool-use",
+      "section": "the-function-calling-primitive"
+    },
+    "tool-schema-design": {
+      "title": "Tool schema design",
+      "prerequisites": ["function-calling"],
+      "chapter": "tool-use",
+      "section": "writing-good-tool-schemas"
+    },
+    "tool-selection": {
+      "title": "Tool selection (when LLM picks the right tool)",
+      "prerequisites": ["function-calling"],
+      "chapter": "tool-use",
+      "section": "when-the-llm-picks-wrong"
+    },
+    "parallel-tool-calls": {
+      "title": "Parallel tool calls",
+      "prerequisites": ["function-calling"],
+      "chapter": "tool-use",
+      "section": "calling-many-tools-at-once"
+    },
+
+    "structured-outputs": {
+      "title": "Structured outputs (JSON schema enforcement)",
+      "prerequisites": ["function-calling"],
+      "chapter": "structured-outputs",
+      "section": "the-schema-as-contract"
+    },
+    "schema-strictness": {
+      "title": "Schema strictness modes",
+      "prerequisites": ["structured-outputs"],
+      "chapter": "structured-outputs",
+      "section": "strict-vs-loose-modes"
+    },
+    "schema-design-for-llms": {
+      "title": "Schema design for LLMs",
+      "prerequisites": ["structured-outputs"],
+      "chapter": "structured-outputs",
+      "section": "schemas-the-llm-can-actually-fill"
+    },
+    "output-validation-loop": {
+      "title": "Output validation + retry loop",
+      "prerequisites": ["structured-outputs"],
+      "chapter": "structured-outputs",
+      "section": "when-validation-fails"
+    },
+
+    "react-general": {
+      "title": "ReAct loops beyond RAG",
+      "prerequisites": ["react-loop", "function-calling"],
+      "chapter": "react-general",
+      "section": "react-as-general-pattern"
+    },
+    "cot-vs-react": {
+      "title": "Chain-of-thought vs ReAct",
+      "prerequisites": ["react-general"],
+      "chapter": "react-general",
+      "section": "cot-vs-react-comparison"
+    },
+    "agent-stop-conditions": {
+      "title": "Agent stop conditions",
+      "prerequisites": ["react-general"],
+      "chapter": "react-general",
+      "section": "knowing-when-to-stop"
+    },
+    "planning-vs-reactive": {
+      "title": "Planning vs reactive agents",
+      "prerequisites": ["react-general"],
+      "chapter": "react-general",
+      "section": "plan-first-vs-react-first"
     }
   }
 }
