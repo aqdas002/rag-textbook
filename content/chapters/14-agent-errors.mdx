@@ -1,0 +1,349 @@
+---
+id: agent-errors
+title: Agent errors
+estimatedMinutes: 25
+concepts: [tool-errors, retry-policy, circuit-breakers, idempotency-in-tools]
+prerequisites: [function-calling, react-general]
+---
+
+import { AgentErrorRecovery } from '@sims/AgentErrorRecovery'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## The error taxonomy
+
+Chapter 13 built a general ReAct loop — Thought, Action, Observation, repeat. The loop assumes
+tool calls return clean results. In production they do not. Networks drop packets. Rate limits
+fire. Servers crash. A tool can succeed on the server side and still fail to deliver its response.
+
+The first thing to understand is that not all failures are the same. There are three categories,
+and confusing them is the single most common production error-handling bug.
+
+**Transient errors** are failures that will probably resolve on their own. The server was briefly
+overwhelmed (503 Service Unavailable), a rate limit fired (429 Too Many Requests), a network
+timeout occurred (408), an upstream dependency blipped. The defining property: the same exact
+call, if repeated after a short wait, will likely succeed. Retry is the correct response.
+
+**Permanent errors** are failures caused by something structurally wrong with the request itself.
+Bad arguments (400 Bad Request), missing credentials (401 Unauthorized), insufficient permissions
+(403 Forbidden), a resource that does not exist (404 Not Found), or a validation failure (422
+Unprocessable Entity). The defining property: the same call, repeated unchanged, will produce
+the same error forever. No amount of retrying will fix it. The correct response is to fail fast
+and surface the error to the LLM or the user so the request can be reformulated.
+
+**Side-effecting errors** are the subtlest category and the most dangerous. The tool executed its
+action and changed state — a charge committed to a payment processor, a row inserted into a
+database, an email sent — but the HTTP response was lost before it arrived. The caller sees a
+failure. The server committed a success. If you retry naively, you charge the user twice, send the
+email twice, or create a duplicate row. The correct response is not to retry blindly, but to retry
+with an idempotency key that lets the server recognize the duplicate and return the original
+response.
+
+These three categories need three different responses. An error-handling system that collapses
+them into one response — "retry everything" or "crash on everything" — will fail in production in
+ways that are expensive and humiliating.
+
+## Retry policy
+
+For transient errors, retry is correct — but not every retry policy is equivalent. The simplest
+policy imaginable, "retry immediately," introduces its own failure mode: if 1000 agent instances
+all hit a rate-limited API and immediately retry in lockstep, they all hit it again simultaneously.
+This is the thundering-herd problem. The retry amplifies load on an already-struggling service.
+
+**Exponential backoff** solves this. After each failure, wait longer before trying again: the wait
+doubles (or roughly doubles) with each attempt. A typical sequence:
+
+```
+attempt 1 → fail → wait 100ms
+attempt 2 → fail → wait 250ms
+attempt 3 → fail → wait 600ms
+attempt 4 → fail → wait 1500ms
+→ give up
+```
+
+The doubling gives the downstream service time to recover before you hit it again. It also means
+your retry attempts consume less API quota during an outage than a constant-rate retry would.
+
+**Jitter** solves the residual correlation problem. Even with exponential backoff, if many agents
+all failed at the same moment, they all add the same backoff delay and still retry in approximate
+lockstep. Adding a random component to each wait — jitter — decorrelates the retries across the
+fleet. A 250ms backoff with full jitter becomes a random draw from [0, 250ms]. The expected wait
+is the same; the synchronization is broken.
+
+The canonical treatment of this pattern is the AWS Architecture Blog post "Exponential Backoff and
+Jitter" (2015, updated 2022), which established the specific recommendation that has since become
+the default in most cloud SDK retry implementations: exponential base, full jitter. The Anthropic
+SDK, AWS SDK, and Google Cloud SDK all implement this pattern as their retry default.
+
+Practical cap: **3–5 retries** for most production workloads. Beyond 5, you are probably not
+recovering from a transient error; you are hammering a service that is genuinely down. Cap
+retries and add a circuit breaker (next section) for sustained failures.
+
+## Circuit breakers
+
+Exponential backoff addresses single-call retry. Circuit breakers address a different problem:
+what happens when a downstream service degrades over a sustained window — not a single hiccup
+but a rolling cascade of failures?
+
+Without a circuit breaker: every agent making calls to the broken tool keeps retrying with
+backoff. Each retry eats time, costs tokens, and adds load to an already-struggling service.
+The retries can actively slow recovery: the service tries to come back up and is immediately
+flooded with queued retries.
+
+The circuit breaker pattern (from Michael Nygard's *Release It!*, 2007, popularized in the JVM
+world by Netflix's Hystrix and later resilience4j) works in three states:
+
+- **Closed** (normal operation): calls pass through. Track failures in a rolling window.
+- **Open** (tripped): after N failures in M seconds, stop forwarding calls. For the next K seconds,
+  every call immediately fast-fails — no network request made. The downstream service gets relief.
+- **Half-open** (probing): after K seconds, let one call through. If it succeeds, close the
+  circuit (resume normal operation). If it fails, stay open and reset the K-second timer.
+
+Standard parameters for agent systems: open after 5 failures in 30 seconds, fast-fail for 60
+seconds, probe on half-open. These numbers are tunable by tool and by team; what matters is that
+you have them at all.
+
+Before running the simulator, predict the full outcome matrix.
+
+<PredictGate
+  concept="circuit-breakers"
+  question="The sim has 3 error scenarios × 3 recovery strategies — 9 cells total. Predict the outcome for each cell before unlocking. Specifically: which strategy fails the worst on the side-effecting timeout scenario, and what exactly happens to the user?"
+  hint="Think about what 'naive retry' does when it doesn't know whether the server committed before the timeout."
+>
+  <AgentErrorRecovery />
+</PredictGate>
+
+**Walking through the 9 cells.**
+
+*Transient 503 row:* No handling crashes on the first error — the loop dies even though a single
+retry would have recovered. Naive retry succeeds on attempt 2, paying +500ms with no backoff.
+Production succeeds on attempt 2 as well but with a 200ms exponential backoff + jitter, which
+is actually faster than naive retry's fixed 500ms wait because the backoff starts small. Both
+handling strategies recover; the difference is one of cost and fleet behavior.
+
+*Permanent 400 row:* No handling crashes once — same behavior as the transient case, which
+coincidentally is the right outcome here (no retry). Naive retry is the disastrous cell: it retries
+3 more times, paying 900ms of additional latency and 4x the API cost, and fails identically every
+time. The error was structural — bad arguments — and no retry was ever going to fix it. Production
+classifies the 400 as permanent, fails fast with 0 retries, and escalates to the LLM with a
+descriptive error message so the LLM can reformulate the call or surface the error to the user.
+
+*Side-effecting timeout row:* This is the cell where naive retry is the worst. The tool
+`charge_card(amount=99.99)` committed the charge server-side before the network dropped the
+response. No handling fails ambiguously — the agent doesn't know whether the card was charged.
+Naive retry retries without any idempotency key, the server has no way to detect the duplicate,
+and it processes a second charge. The user is billed $99.99 twice. Production retries with
+`idempotency_key="idem_a9f3"` attached; the server recognizes the key, returns the original
+response, and does not process a second charge.
+
+**The lesson naive retry teaches.** Treating all errors as transient is not conservative — it is
+risky. It wastes cost on permanent errors and double-charges users on side-effecting errors. Error
+classification is load-bearing, not optional.
+
+## Idempotency
+
+An operation is **idempotent** if applying it multiple times has the same effect as applying it
+once. GET requests are idempotent by definition. Charging a card is not. Inserting a row is not.
+Sending an email is not. Any tool that changes external state is not idempotent by default.
+
+The standard fix is the **idempotency key** pattern:
+
+1. The client generates a UUID for each logical operation — not for each HTTP request, but for
+   each thing it is trying to accomplish. If the first try times out and a retry is needed, the
+   retry carries the same UUID.
+2. The server stores a mapping from `(idempotency_key → response)` with a TTL (typically 24–48
+   hours). On the first request with a given key, it executes normally and caches the response.
+3. If the same key arrives again (a retry), the server returns the cached response immediately
+   without re-executing. The client gets the same answer. The user is charged once.
+
+Stripe pioneered this pattern publicly and documents it as a first-class API feature. Pass an
+`Idempotency-Key` header; Stripe guarantees that duplicate requests with the same key return the
+original response rather than processing a new charge. AWS and most modern payment and
+financial APIs have adopted the same convention.
+
+For internal tools you write yourself — tools that will be called inside agent retry loops — build
+idempotency in before agents start calling them. The pattern is straightforward: accept an
+optional `idempotency_key` parameter, store `{key: result}` in a cache (Redis is common), check
+on every call before executing. The cost is a single cache lookup per call. The cost of not doing
+it is double-charges.
+
+## In practice
+
+### The error categories in real terms
+
+Mapping HTTP status codes to the three categories:
+
+- **Transient:** 408 (Request Timeout), 429 (Too Many Requests), 500 (Internal Server Error,
+  when you cannot verify whether side effects occurred), 502 (Bad Gateway), 503 (Service
+  Unavailable), 504 (Gateway Timeout). Also: network timeouts (ETIMEDOUT), connection resets
+  (ECONNRESET), DNS failures. These are the codes where a retry with backoff is the first response.
+
+- **Permanent:** 400 (Bad Request — bad arguments), 401 (Unauthorized — missing or invalid
+  credentials), 403 (Forbidden — caller lacks permission), 404 (Not Found — resource does not
+  exist), 405 (Method Not Allowed), 422 (Unprocessable Entity — valid JSON but semantically
+  wrong). These codes tell you the request is structurally wrong and retrying it unchanged is
+  pointless.
+
+- **Side-effecting:** Any of the above codes when received *after* a tool that mutates state. A
+  200 followed by a network drop before the body arrives. A 502 from a downstream that committed
+  before the gateway crashed. The most dangerous ambiguity: **500 errors after a side-effecting
+  call.** You do not know whether the server committed before crashing. Treat post-side-effect
+  500s as side-effecting (not transient) until you can verify from logs or a separate idempotency
+  check.
+
+### Backoff numbers people actually use
+
+The specific numbers matter less than having defensible defaults and logging retry behavior.
+What actual SDKs ship:
+
+- **AWS SDK:** base delay 100ms, maximum delay 20s, up to 3 retries with full jitter.
+- **Google Cloud SDK:** similar parameters — exponential with jitter, cap around 32s.
+- **Anthropic SDK:** configurable; defaults to exponential backoff with 4 retries, matching the
+  AWS pattern.
+- **Stripe client:** 2 retries by default, exponential with jitter. Stripe's own infrastructure
+  is reliable enough that 2 retries covers nearly all transient cases.
+
+For custom retry wrappers, a reasonable starting point: base 100ms, factor 2.5, cap 10s, maximum
+4 attempts, full jitter. Log every retry with `{tool, attempt, delayMs, statusCode}` so you can
+trace retry storms in production.
+
+### Circuit breakers in agent loops
+
+Standard circuit breaker parameters for agent systems: open after 5 failures in a 30-second
+rolling window, fast-fail for 60 seconds, allow one probe on half-open.
+
+The trickier question for production agent deployments is granularity. Options:
+
+- **Per tool, global:** one circuit breaker per tool, shared across all agents. Simple to implement;
+  right most of the time.
+- **Per (tool, user) pair:** separate breakers per user. Useful when one user's workload can fail
+  a tool for unrelated reasons (bad auth on their side) without affecting others.
+- **Per tool per region:** for geographically distributed deployments where a tool might be down
+  in us-east-1 but healthy in eu-west-1.
+
+Most production teams start with per-tool global breakers and add per-region only after a
+regional incident reveals the need. Per-(tool, user) is rare and adds significant bookkeeping.
+
+The circuit breaker state should be shared across agent instances — stored in Redis or a similar
+shared cache, not in process memory. A breaker living in local memory only protects one process.
+
+### Idempotency keys in practice
+
+The HTTP header convention is `Idempotency-Key: <uuid-v4>`. Server-side TTL for caching
+responses is typically 24–48 hours — long enough to cover any realistic retry window, short
+enough to bound storage cost.
+
+For internal tools: build idempotency in as follows. The tool function accepts an optional
+`idempotency_key` parameter. On every call:
+
+1. Check the cache for `idempotency_key`. If found, return the cached response immediately.
+2. If not found, execute the action, cache `(key → response)` with a 48-hour TTL, return the
+   response.
+
+The key must be stable across retries. Generate it once per logical operation, before the first
+attempt, and pass it through to every retry. Never generate a new key per attempt — that defeats
+the entire point.
+
+### What about non-HTTP tools?
+
+Tools that are local Python functions, file-system writes, database inserts, or in-process state
+mutations — the same patterns apply, implemented at the application layer.
+
+- **File writes:** use atomic rename. Write to a `.tmp` file, then rename to the final path.
+  A crash during the write leaves a `.tmp` file that can be cleaned up; it never leaves a
+  half-written final file. This is the POSIX-safe equivalent of idempotency for file I/O.
+
+- **Database writes:** wrap the operation in a transaction and maintain an idempotency table
+  `(idempotency_key TEXT PRIMARY KEY, response JSONB, created_at TIMESTAMPTZ)`. Check the
+  table before executing. Transaction semantics ensure that the insert and the idempotency
+  record either both commit or both roll back.
+
+- **In-process state mutations:** if the tool modifies shared state (a dict, a queue, a
+  counter), the same check-before-execute pattern applies. The "cache" can be an in-memory
+  set of seen idempotency keys.
+
+### The single highest-leverage error-handling trick
+
+**Make all your custom tools idempotent by default.** It is cheap to add (one UUID parameter,
+one cache lookup) at design time. It is extraordinarily expensive to retrofit after agents
+start calling them in retry loops — because by then, double-charges or duplicate state
+mutations may already be reaching users.
+
+The tools you write yourself are the ones you fully control. Public APIs like Stripe and AWS
+already implement idempotency; you do not need to add it for them. But the internal `charge_user`,
+`send_notification`, `create_order`, and `update_inventory` tools you build for your own
+agent — those are where the risk lives. Add idempotency keys before the agent loop touches them.
+
+### The failure mode you will see in production
+
+> "Our agent is charging some customers multiple times during incidents."
+
+This is the most common and most visible production failure in agentic systems that handle
+money or communication. The root cause is almost always the same:
+
+1. A side-effecting tool (`charge_card`, `send_email`, `create_subscription`) does not
+   implement idempotency keys.
+2. A retry policy treats 5xx errors as transient and retries them unconditionally.
+3. The server commits the action before the 5xx is returned (e.g., a downstream dependency
+   crashed after the charge was processed but before the response was serialized).
+4. The retry fires, the server processes a second charge, the user is billed twice.
+
+The fix has two parts, both required: (a) idempotency keys on every state-changing tool,
+and (b) error classification that treats post-side-effect 500s as ambiguous (not transient).
+One without the other is insufficient. Idempotency without classification still causes
+unnecessary retries that stress the downstream. Classification without idempotency still
+double-charges when the server committed before crashing.
+
+### Where error handling fits in the bigger system
+
+Every tool call in the agent loop passes through a retry policy wrapper. The circuit breaker
+is per-tool, shared across all in-flight agent instances.
+
+```
+agent loop:
+  LLM → tool call → [retry policy wrapper:
+    classify error → if transient:    backoff + retry
+                                      (with idempotency key if side-effecting)
+                  → if permanent:     fail-fast, escalate to LLM with error message
+                  → if side-effecting: retry with idempotency key only]
+               → [circuit breaker: open after N failures in M seconds]
+  → observation → continue loop
+```
+
+The circuit breaker wraps the retry wrapper — it decides whether any attempt (even attempt 1)
+should be made. If the breaker is open, fast-fail immediately without touching the network.
+The LLM receives a `"tool unavailable — service down, circuit open"` observation and can
+decide to wait, escalate, or pursue an alternate path.
+
+This is the production default: not a single retry strategy, but a layered system where each
+layer handles one failure mode.
+
+## Recall — interview style
+
+The questions below are scenario-based: a specific situation, constraints, and a problem to
+reason through. What matters is whether you identify the right failure category, propose
+specific mechanics (not generic "add error handling"), and flag the downstream consequences.
+
+<RecallPrompt
+  concept="idempotency-in-tools"
+  question="**Production debug.** Customers are being double-charged during an incident. Walk through the full diagnosis: what specific failure sequence produced the double charge, what code change fixes it, and where in the system does the fix live? What would you add to prevent this class of bug from reaching production again?"
+/>
+
+<RecallPrompt
+  concept="retry-policy"
+  question="**Design choice.** Your agent calls a flaky internal API (5% error rate, errors are mostly transient timeouts, occasionally 429s during peak load). Walk through the retry + circuit breaker configuration you'd ship: what backoff parameters, what circuit breaker thresholds, what metrics you'd log, and how you'd tune the parameters after the first week in production."
+/>
+
+<RecallPrompt
+  concept="tool-errors"
+  question="**Cost vs quality.** Your agent's retry rate is 12% of all tool calls — the average call takes 1.8 attempts. Walk through whether this is acceptable, what conditions would make it unacceptable, and three concrete actions you'd take if it's too high. What does a healthy retry rate look like for a production agent?"
+/>
+
+<RecallPrompt
+  concept="circuit-breakers"
+  question="**Senior eng pushback.** A teammate proposes 'just retry everything 5 times — what's the worst that could happen?' Push back with the specific failure modes this introduces. Give an example for each of the three error categories — transient, permanent, and side-effecting — and quantify the cost of the naive approach in at least one of the three."
+/>
+
+<RecallPrompt
+  concept="circuit-breakers"
+  question="**Failure-mode trace.** A previously-stable downstream service degrades to 30% error rate. Your agent's tool calls are hammering it with retries during the outage, making recovery slower. Walk through how a circuit breaker would have prevented this, what its parameters should have been, and what the agent's behavior looks like with the breaker open versus without it."
+/>
