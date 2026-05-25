@@ -1,0 +1,257 @@
+---
+id: agent-evals
+title: Agent evals
+estimatedMinutes: 35
+concepts: [agent-trace-evals, agent-success-rate, tool-use-diversity, cost-outlier-detection]
+prerequisites: [eval-set-construction, react-general]
+---
+
+import { AgentTraceDashboard } from '@sims/AgentTraceDashboard'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## Why agent eval is different from RAG eval
+
+Chapter 6 gave you the full RAG evaluation vocabulary: precision@K, recall@K, MRR, nDCG, faithfulness, and correctness. All of those metrics answer a version of the same question — did you find the right documents and answer from them faithfully? The pipeline has a clean input (query) and a clean output (answer), and you grade the output.
+
+Agent eval breaks that frame. The answer is still gradeable, but it is no longer the only thing that matters. Consider this scenario: an agent receives the query "find all open AUTH issues blocking the v2.1 release." Two agents both eventually fail to return the correct answer — but one fails after 3 steps and $0.01, and the other fails after 12 steps and $0.18. Same final result. Completely different production story.
+
+Now flip the scenario: two agents both return the correct answer. One did it in 2 steps, one did it in 8. Same accuracy. But the 8-step agent is four times slower and costs four times as much. At scale — millions of queries per day — that difference is not cosmetic. A p99 cost outlier eating 7x the median cost means a handful of traces are consuming most of your inference budget.
+
+This is the core difference: **agent eval has to grade both the outcome and the path.**
+
+RAG eval grades a snapshot: the retrieved context and the generated answer at the moment of response. Agent eval grades a trajectory: every tool call, every observation, every intermediate step, all the way to the final answer. The same outcome can be reached by efficient, well-chosen paths or by looping, redundant, expensive paths. Aggregate evaluation metrics that measure only the final answer are blind to this difference — and that blindness will hurt you in production.
+
+The metrics change as a result. Precision and recall still matter for the final answer, but you also need step count distribution, tool-use diversity, cost-per-trace statistics, and step-limit-hit rate. None of those exist in the RAG eval vocabulary because RAG is not a multi-step process. Agents are.
+
+## The headline metric — task success rate
+
+The closest analog to precision@K in agent systems is **task success rate**: for a fixed eval set of (query, ground-truth-answer) pairs, what fraction of agent runs produce a final answer matching the ground truth?
+
+```
+success_rate = successful_runs / total_runs
+```
+
+This is the single number you put in the executive dashboard. It is interpretable, stable across model versions, and easily tracked over time. If your success rate drops from 84% to 71% after a code change, something broke. Full stop.
+
+But success rate hides almost everything important. A 90% success rate could mean:
+
+- The agent reliably handles 90% of queries, and the failing 10% are a consistent cluster of hard queries that need more work.
+- The eval set skews easy — all 90% of "successes" are simple single-tool queries, and the 10% failures are the only complex multi-hop queries in the set.
+- The agent is succeeding on the queries you tested and failing on cohorts of queries you never included in your eval set.
+
+The number alone does not tell you which scenario you are in. That requires **cohort analysis**: slice the success rate by query type, complexity bucket, user segment, and source. A 90% overall success rate that is 98% on simple queries and 55% on multi-hop queries is a very different problem than a 90% overall rate that is uniformly distributed across difficulty levels.
+
+Cohort success rate is the metric that actually drives roadmap decisions. The aggregate is what you report; the cohort breakdown is what you act on.
+
+## Trace-level metrics
+
+Beyond the final answer, a healthy agent eval suite tracks four trace-level signals.
+
+**Step count distribution.** The mean step count tells you nothing useful on its own — what matters is the shape of the distribution. A healthy agent has a tight distribution: most queries resolve in 2–6 steps, with rare queries going to 8–10. A sick agent has a long tail: the mean is 5, but p99 is 14, which means a nontrivial fraction of queries are hitting step counts that signal the agent is looping, second-guessing itself, or making unnecessary tool calls. A high step count at p99 with a low step count at p50 is almost always a signal of a specific failure mode, not general inefficiency — and it points to a cluster of queries or a category of tool calls you need to investigate.
+
+**Tool-use diversity.** Compute the number of distinct tools called across all traces divided by the total number of tools available to the agent. A well-functioning agent should use a reasonable fraction of its toolbox across a diverse eval set — if the eval set is diverse and the agent is using only 2 of 16 available tools, that is either a sign the agent has learned to over-rely on a small subset (a routing bug) or a sign that most of your tools are not well-positioned in the eval set to be needed. Low diversity is not automatically alarming — some agents genuinely have a broad toolbox but a narrow task distribution. High diversity across a varied eval set is a sign of healthy tool routing.
+
+**Cost per trace.** The median cost is the headline; the p99 is what kills your budget. A p99-to-median cost ratio above 5x is a strong signal that cost outliers dominate your inference spend — a small fraction of queries are consuming a disproportionate share of the budget. The most common cause is step-limit hits: a query that runs to the step limit makes 12+ LLM calls instead of the usual 3–5, and each call has a non-trivial cost. The second most common cause is retry storms: an agent that retries a failing tool call five times per step amplifies its step count by 5x without making forward progress. Both failure modes are invisible in the median.
+
+**Step-limit-hit rate.** Every agent loop has a maximum step count — a circuit breaker that terminates the loop if the agent has not reached a final answer. The step-limit-hit rate is the fraction of eval traces that terminate by hitting this limit rather than by the agent choosing to stop. In a well-tuned system, this should be under 5%. A rate above 10% means the agent is failing to converge on too many queries — it is looping, getting confused by ambiguous observations, or failing to recognize when it has enough information to answer. Step-limit hits are always failures: the agent did not produce a valid answer, and it cost you 12+ LLM calls to discover that.
+
+### The eval dashboard
+
+Before you continue: you have a dataset of 8 pre-recorded agent traces — a mix of successes, failures, and one cost outlier. Before unlocking the dashboard, make a prediction.
+
+<PredictGate
+  concept="agent-trace-evals"
+  question="The sim has 8 pre-recorded agent traces. Predict before unlocking: (1) What is the overall success rate across the 8 traces? (2) There is one expensive cost outlier trace. What is the likely failure mode of that trace, and what do you expect the ratio of p99 cost to median cost to be? Think through what categories of failure produce the most extreme cost outliers."
+  hint="Step-limit hits and retry loops are the two most common causes of p99 cost spikes. Consider which category of query tends to loop in agentic systems."
+>
+  <AgentTraceDashboard />
+</PredictGate>
+
+**What the dashboard reveals.** The 8 traces show a 75% success rate (6 of 8 traces succeed). Two traces fail: trace-007 hits the step limit on the AUTH issues query, and trace-008 produces a wrong answer on the compound interest calculation due to a rounding error.
+
+Median cost across all traces is approximately $0.025. The p99 cost is $0.18 — the AUTH issues trace (trace-007), which ran for 12 steps before the step limit terminated it. That is a 7x ratio of p99 to median. Sort the trace list by cost to bring trace-007 to the top, then click through it: the agent correctly identifies the 5 tickets in the release plan, checks each one individually, then expands its search to find 2 more AUTH issues not in the plan, checks those, then cross-references with the sprint backlog, then looks up a PR status — and is terminated by the step limit mid-investigation, having already produced all the information needed to answer the query but never reaching the final `respond()` call.
+
+This is the key pedagogical point: the aggregate 75% success rate is a useful top-line number. But it does not tell you which traces failed, why they failed, or how much they cost. The p99 cost ratio tells you outliers exist. The trace drill-down tells you what is actually going wrong. You need both views. Aggregate metrics tell you whether something is wrong; trace-level inspection tells you what to fix.
+
+Tool diversity across all 8 traces: 7 distinct tools were used from the available toolbox (get_weather, search_flights, compare_prices, search, calculator, get_calendar, create_meeting, summarize, lookup). That is healthy coverage for a diverse 8-query eval set.
+
+## LLM-as-judge for agents
+
+Hand-grading agent traces at scale is impractical. A single trace is 5–12 LLM calls long. Reading it, understanding the reasoning chain, and scoring each step requires time that does not exist in a production eval pipeline that runs on every deployment. For scale, you use **LLM-as-judge** — but the rubric is substantially more complex than for RAG.
+
+A RAG judge rubric asks two questions: did the answer come from the retrieved context (faithfulness), and is the answer correct (correctness)? An agent judge rubric needs to ask four:
+
+**1. Final answer correctness.** Is the agent's final answer correct relative to the ground truth? This can be binary (match / no match for factoid queries) or scored 1–3 if partial credit makes sense (e.g., the agent found 2 of the 3 blocking tickets — not wrong, but incomplete).
+
+**2. Path efficiency.** Did the agent take a reasonably efficient path to the answer? The judge should score low for traces with unnecessary tool calls, redundant lookups, or steps that the agent's own Thought acknowledged were probably not needed. The target is not the absolute minimum number of steps — sometimes exploring is appropriate — but gross inefficiency should be penalized.
+
+**3. Tool selection quality.** Was each tool call the right tool for that step? An agent that calls a generic `search` tool when a specific `lookup` tool would have been faster and cheaper is making a tool selection error. The judge compares each tool call to the available toolbox and the preceding Thought, and scores whether the choice was appropriate.
+
+**4. No catastrophic side effects.** Did the agent take any actions it should not have — charging a card, sending an email, writing to a production database, or deleting a resource — when those actions were not authorized for the query? This is a binary pass/fail. A single catastrophic side effect is an automatic failure regardless of the other scores.
+
+The judge prompt should elicit structured scores, not prose. Ask the judge to return JSON: `{"correctness": 1, "efficiency": 2, "tool_quality": 3, "no_catastrophic_side_effects": true}`. Prose outputs require a second parsing step and introduce variability; structured scores do not.
+
+The same calibration process from Chapter 6 applies here — validate against human ratings before trusting the judge at scale. The bar is 50–100 hand-graded traces with Cohen's kappa above 0.7 before you use the judge for regression detection. The agent rubric is more complex than the RAG rubric, which means calibration is more important, not less. Human raters will disagree more on "path efficiency" than on "faithfulness" — make sure your rubric is specific enough that two independent raters converge before you hand the job to an LLM.
+
+## The eval set for agents
+
+Building an agent eval set is harder than building a RAG eval set. For RAG you need `(query, relevant_docs)` per entry. For agents you need `(query, expected_answer)` at minimum, and ideally `(query, expected_answer, expected_path)`.
+
+The expected path — the sequence of tool calls you expect a well-functioning agent to make — is much harder to construct than the expected answer. There are almost always multiple valid paths. The query "find the cheapest flight to Paris next Tuesday" could be answered by calling `search_flights` then `compare_prices`, or by calling `search_flights` with filters directly, or by a sequence involving several `search_flights` calls with different parameters. Grading against a single expected path creates false failures when the agent found a correct but different path.
+
+Most production teams skip the expected path entirely and grade only on outcome plus efficiency proxies (step count, cost). This is the pragmatic default — you get most of the signal without the brittleness of path matching. The exceptions are high-stakes systems where the path itself matters: a medical diagnosis agent where the ordering of tests matters, or a financial trading agent where the sequence of price checks matters. For those cases, you can define expected paths as partial order constraints rather than full sequences — "tool X must come before tool Y, but anything else can come in between."
+
+For construction: start with 30–50 queries hand-curated from real user traces. Real queries are essential — synthetic queries invented by engineers tend to reflect the engineer's mental model of the agent, not the user's actual usage patterns. Label ground-truth answers. Flag each query with a difficulty tier (simple single-tool, moderate multi-step, complex multi-hop) and a domain (search, calendar, calculation, code lookup). Expand the eval set based on production failures: every novel failure mode gets a representative query added immediately, before the pattern is forgotten.
+
+At 30–50 queries you have enough to detect obvious regressions. At 200 queries, cohort analysis becomes meaningful. At 500+, you have enough statistical power to detect subtle degradation in specific query subcategories.
+
+## In practice
+
+### The metric stack people actually use
+
+Production agent systems track metrics at three layers.
+
+**Aggregate layer** — reported daily, used for release gates:
+- Success rate across the full eval set
+- p50 and p99 step count
+- p50 and p99 cost per trace
+- Step-limit-hit rate
+
+**Cohort layer** — reported weekly, used for roadmap prioritization:
+- Success rate sliced by query type (simple / multi-step / multi-hop)
+- Success rate sliced by user segment or product area
+- Cost distribution by query type (some query categories are systematically more expensive)
+
+**Trace layer** — inspected on-demand, used for debugging specific failures:
+- Full Thought-Action-Observation trace for every failing trace
+- Per-step tool call + cost breakdown
+- Side-by-side comparison of similar queries with different outcomes
+
+Production teams ship all three layers as dashboards. Phoenix (Arize), LangSmith, and LangFuse all support this structure with varying levels of out-of-the-box support. Teams running at scale often build custom dashboards on top of OpenTelemetry traces, routing per-step spans into a time-series store and aggregating over it.
+
+### What "good" looks like in production
+
+Reasonable targets for a tuned agentic system in a general-purpose domain:
+
+- **Success rate > 85%**. Below 75% is a product-level problem, not just an engineering problem.
+- **Step-limit-hit rate < 5%**. Above 10% means the agent is failing to converge on too many queries and your step limit is being hit as a safety net, not an edge case.
+- **p99 / median cost ratio < 4x**. Above 5x means cost outliers dominate your inference bill.
+- **Tool-use diversity > 50% across the eval set**. The agent should use more than half its toolbox across a diverse query set.
+
+Numbers vary significantly by domain. Medical diagnosis agents target success rates above 95% and tolerate higher per-trace costs in exchange for thoroughness. Consumer chat agents often tolerate 75–80% success rates because the stakes per query are lower. High-stakes financial or legal agents compress all the thresholds: step-limit-hit rate < 1%, cost ratio < 2x, and success rate > 90%.
+
+### Cohorting catches what aggregates hide
+
+The most important thing you can do with a success rate metric is slice it.
+
+A 90% overall success rate could be:
+- 98% on single-tool queries + 55% on multi-hop queries — your multi-hop capability is broken.
+- 91% on daytime queries + 73% on queries submitted after 11pm — a rate-limiting or service degradation pattern correlated with time.
+- 95% on queries from enterprise users + 72% from free tier users — a capability gap correlated with query complexity (free tier users tend to submit harder, more exploratory queries).
+
+All three produce a 90% aggregate. All three have completely different product implications. You do not know which one you have until you slice.
+
+Build cohort splits at eval set construction time. Tag each query with its type, complexity bucket, and source. Run cohort success rates as part of every eval run. Put them in the same dashboard as the aggregate so the comparison is always visible. The aggregate is the headline; the cohort breakdown is the diagnosis.
+
+### The cost-outlier problem
+
+The trace-007 AUTH issues trace in the sim — $0.18, 12 steps, step-limit hit — is a good illustration of the production cost-outlier problem at small scale.
+
+At scale the p99/p50 cost ratio is a key health signal:
+
+| Ratio | Signal |
+|---|---|
+| < 3x | Healthy — step count variance is under control |
+| 3–5x | Concerning — investigate the p99 traces; something is looping |
+| > 5x | Cost outliers dominate your budget — a small fraction of traces are eating most of your inference spend |
+
+The 7x ratio in the sim is firmly in the "investigate immediately" range. At production scale, a 7x p99/p50 ratio on a system handling 1 million queries per day means the top 1% — 10,000 queries — are each costing 7x the median, and those 10,000 queries are contributing more than half the total inference cost. Fixing the failure mode driving p99 often cuts total cost by 30–50% without touching the 99% of queries that are working correctly.
+
+Diagnosing p99 outliers: sort your traces by cost descending. Read 10 traces from the top 1%. The failure modes are almost always obvious in the trace — step-limit hit, retry loop on a failing tool, unnecessary broadening of search scope after already having the answer. The pattern surfaces quickly from reading; you rarely need to do statistical analysis.
+
+### LLM-as-judge specifics for agent traces
+
+A few agent-specific calibration notes on top of the LLM-as-judge guidelines from Chapter 6.
+
+**Use a stronger model to judge than you use for the agent.** Judging is a single call per trace. The agent loop is 3–12 calls per trace. The cost asymmetry justifies using a more capable model for judging — a GPT-4-class or Claude Opus-class model to evaluate an agent built on a faster, cheaper model.
+
+**Watch for position bias in tool sequence evaluation.** LLM judges systematically over-weight the first tool call in a trace when evaluating overall tool selection quality. The first call is most prominent in the prompt; later calls get less attention. Randomizing the order of steps in the judge prompt is impractical (it destroys the sequential logic), so instead: explicitly instruct the judge to evaluate each step individually before computing an overall score.
+
+**Watch for length bias.** Judges often score longer traces higher on "thoroughness" even when the additional steps were unnecessary. Your rubric should explicitly distinguish thoroughness from efficiency and penalize unnecessary steps.
+
+**Watch for self-preference.** If the judge model is from the same model family as the agent, the judge will systematically rate the agent's reasoning style as higher quality than it rates reasoning from a different model family. When possible, use a different model family for judging, or validate in your calibration data that self-preference is not inflating scores.
+
+### The single highest-leverage trick
+
+**Log per-step cost and time, not just per-trace totals.**
+
+Most production teams track total cost per query and total latency per query. That is necessary but not sufficient. The distribution of cost across steps within a trace is where the actionable signal lives.
+
+Consider a trace with 8 steps and a total cost of $0.09. That sounds expensive — 3x the median — but without per-step data you cannot tell whether the cost was uniformly distributed (each step costs $0.011, all steps were appropriate) or concentrated (step 7 cost $0.06 because the agent constructed an enormous prompt by concatenating all previous observations). The latter is fixable — truncate the observation history at step 5 and the cost comes down. The former might just be an inherently expensive query type.
+
+Per-step logging surfaces patterns across traces instantly. When you see that step 7 is consistently the cost spike across 50 traces from a specific query category, you have a specific target: what is the agent doing at step 7 that is so expensive, and can it be done earlier or more efficiently?
+
+This logging requires instrumenting your agent loop at the step level, not just the trace level. Every Thought-Action-Observation cycle should emit a span with its token count and cost. The overhead is minimal; the diagnostic value is high.
+
+### The failure mode you will see in production
+
+> "Our agent's success rate is 90% in eval, but customers are reporting it as unhelpful."
+
+This is the most common agent eval failure mode, and it has a consistent root cause: the eval set does not cover the queries customers actually send.
+
+The eval set was built by engineers from internal testing sessions, beta user logs, and synthetic queries that seemed representative. Production is messier. Customers send queries with implicit context ("find the thing from last week"), queries that span multiple domains the agent was not designed to bridge, queries with ambiguous references that are obvious to a human and opaque to an LLM, and queries that are technically answerable but require a specific combination of tool calls the agent was never trained to sequence.
+
+The divergence between eval performance and production performance grows over time as usage patterns evolve. A 5-percentage-point gap (90% eval, 85% production) is manageable. A 25-point gap (90% eval, 65% production) means your eval set is no longer representative of your actual user base.
+
+Mitigation: sample 1% of production traces weekly. Hand-grade them against the same rubric you use for your eval set. Compute a production-sampled success rate and compare it to your eval success rate weekly. If they diverge by more than 10 percentage points, your eval set needs to be updated — add queries from the failure cluster and re-run calibration. The production-sampled rate is the ground truth; the eval rate is a prediction. When the prediction is consistently wrong, update the model.
+
+### Where agent evals fit in the bigger system
+
+```
+feature branch → unit tests → integration tests → [agent eval suite, full] →
+                                                         ↓
+                                                  regression detection
+                                                         ↓
+                                                  release decision
+
+production: streaming traces → [sampled eval, daily] → drift alerts
+```
+
+This is structurally identical to the RAG eval pipeline from Chapter 6. The difference is what gets measured — the metrics are broader, the per-trace inspection is richer, and the calibration is harder. The structural role is the same: agent eval gates merges by detecting regressions before they reach production, and production sampling detects drift after release.
+
+The full eval pipeline catches two different failure categories. Pre-release evaluation catches regressions introduced by code changes — a new model version that changed tool selection behavior, a prompt edit that degraded multi-hop reasoning, a tool schema change that confused the routing logic. Production sampling catches distribution shift — the usage patterns that were not in your eval set at release time but emerged as the user base grew.
+
+Both loops are required. Teams that run only pre-release evaluation are blind to distribution shift. Teams that run only production sampling cannot detect regressions before they reach users. The combination gives you coverage across both axes.
+
+## Recall — interview style
+
+The questions below are scenario-based: a specific situation, constraints, and a problem to reason through. What matters is whether you identify the right failure mode, propose specific (not generic) actions, and flag the downstream consequences before they happen.
+
+<RecallPrompt
+  concept="agent-trace-evals"
+  question="**Production debug.** Your agent's success rate is 90% on eval but 65% on production-sampled queries. Walk through the diagnosis: what is the most likely cause of a 25-point divergence, and what are the first three specific things you would do? How would you tell the difference between 'the eval set is unrepresentative' and 'the agent regressed since the last eval run'?"
+/>
+
+<RecallPrompt
+  concept="agent-success-rate"
+  question="**Design choice.** You are building an eval suite for a new analytics agent. You have 200 real user queries from your beta. Walk through how you would construct ground truth, what cohort splits you would build, and what single metric you would put on the executive dashboard. What is your strategy for keeping the eval set representative as usage patterns evolve over the first six months?"
+/>
+
+<RecallPrompt
+  concept="cost-outlier-detection"
+  question="**Cost vs quality.** Your p99 cost per query is 8x median. The CFO wants it under 3x within a quarter. Walk through how you would diagnose what is driving the p99, and name three concrete tactics for closing the gap. How would you prioritize among the three given limited engineering time?"
+/>
+
+<RecallPrompt
+  concept="cost-outlier-detection"
+  question="**Senior eng pushback.** A teammate proposes 'we don't need per-step logging — total cost per trace is enough for billing.' Push back. Name at least three specific failure modes you cannot diagnose without per-step data, and explain why the aggregate masks each one."
+/>
+
+<RecallPrompt
+  concept="tool-use-diversity"
+  question="**Failure-mode trace.** Your tool-use diversity metric is 12%: the agent is calling roughly 2 of 16 available tools across your full eval set. Walk through whether this is alarming, what scenarios would make this normal versus concerning, and how you would investigate. What specific evidence would cause you to conclude this is a routing bug versus a reflection of the eval set's query distribution?"
+/>
+
+---
+
+The five-chapter Agents module opened by showing how a standard RAG pipeline gains memory, autonomy, and multi-step reasoning through the ReAct loop (chapter 11), then built out the full tool-use primitive that makes tool-calling agents possible (chapters 12–13). Chapter 14 showed how that autonomy introduces a new failure category — errors that mutate state, require idempotent retries, and can cascade through circuit breakers when a downstream service degrades. This chapter closed the loop: once an agent is running in production, the question is not just whether it is correct but whether it is efficient, cost-predictable, and improving over time — and the answer to that question lives in the trace, not just the final answer. Together, the module is also a capstone for the RAG foundations laid in chapters 1–6: the chunking, embedding, retrieval, and eval infrastructure built in the first half of the book is the substrate on which agents operate; agent evals are RAG evals extended to cover the path, not just the destination.
