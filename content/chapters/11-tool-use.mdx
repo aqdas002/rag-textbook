@@ -1,0 +1,433 @@
+---
+id: tool-use
+title: Tool use
+estimatedMinutes: 30
+concepts: [function-calling, tool-schema-design, tool-selection, parallel-tool-calls]
+prerequisites: [agent-cost-explosion]
+---
+
+import { ToolSelectionExplorer } from '@sims/ToolSelectionExplorer'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## From retrieval to tools
+
+The previous ten chapters all assumed the same thing: retrieval is the thing the LLM has access to. The RAG pipeline's job was to find the right chunks, pass them to the model, and let the model synthesize an answer. Chapter 8 started to crack that open — inside an agentic RAG loop, the model can call `search()`, `lookup()`, or `compute()` in sequence. Retrieval became one tool among several.
+
+The Agents module generalizes this completely. The model is not a retrieval consumer — it is an orchestrator. It can call any function your application exposes: APIs, databases, calculators, file systems, external services. Retrieval is one option in a menu. The primitive that makes the whole menu possible is **function calling**.
+
+Function calling is not a framework or an abstraction. It is a feature of the raw model API: you describe tools as structured schemas, the model decides which tool to call and what arguments to pass, your code runs the call, and the result feeds back into the conversation. Everything that a multi-step agent does — plan, retrieve, compute, decide, answer — rides on this loop. Getting function calling right is the difference between an agent that works and one that fails in subtle ways you cannot easily debug.
+
+## The function calling primitive
+
+Function calling works in one repeating cycle. Here is the full mechanical picture.
+
+**Step 1: You send the model a list of tool schemas.** A schema has three parts: a name, a description, and a parameter definition (JSON Schema format). You include the tools alongside your system prompt and the user's message in a single API call.
+
+**Step 2: The model responds with either text or a tool call.** If the model decides a tool is needed, it returns a `tool_call` block — not a text response — containing the tool name and a JSON object of arguments.
+
+**Step 3: You execute the tool.** Your application code receives the tool name and arguments, runs the actual function, and collects the result.
+
+**Step 4: You send the result back.** You append the tool call and its result to the conversation as a `tool_result` message and call the API again.
+
+**Step 5: Repeat or finish.** The model reads the result and either calls another tool or generates a final text answer.
+
+A minimal end-to-end cycle in Python with the Anthropic API looks like this:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+tools = [
+    {
+        "name": "get_weather",
+        "description": "Get the current weather for a city. Returns temperature in Celsius and a short conditions string.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "The city name, e.g. 'Tokyo' or 'London'"
+                }
+            },
+            "required": ["city"]
+        }
+    }
+]
+
+messages = [{"role": "user", "content": "What's the weather in Tokyo right now?"}]
+
+# Step 1 + 2: send tools, receive tool call
+response = client.messages.create(
+    model="claude-opus-4-5",
+    max_tokens=1024,
+    tools=tools,
+    messages=messages
+)
+
+# response.stop_reason == "tool_use" means a tool was called
+tool_use_block = next(b for b in response.content if b.type == "tool_use")
+tool_name = tool_use_block.name          # "get_weather"
+tool_input = tool_use_block.input        # {"city": "Tokyo"}
+
+# Step 3: execute the actual function
+result = get_weather(tool_input["city"])  # your implementation
+
+# Step 4: send the result back
+messages.append({"role": "assistant", "content": response.content})
+messages.append({
+    "role": "user",
+    "content": [{
+        "type": "tool_result",
+        "tool_use_id": tool_use_block.id,
+        "content": result
+    }]
+})
+
+# Step 5: final response
+final = client.messages.create(
+    model="claude-opus-4-5",
+    max_tokens=1024,
+    tools=tools,
+    messages=messages
+)
+# final.content[0].text is the answer to the user
+```
+
+The OpenAI API follows the same shape with slightly different field names. You pass `tools=[{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}]` and receive `tool_calls` on the response choice when the model decides to call a tool. The wire format differs; the conceptual model is identical.
+
+Three things are worth anchoring before moving forward:
+
+- **The loop is your code, not the model's.** The model does not know it is in a loop. Each API call is independent. You write the code that detects a tool call, executes it, and feeds the result back. This means you control step limits, error handling, and when to stop — the model cannot enforce any of these itself.
+- **The model never executes anything.** It returns structured JSON describing what it wants to call and with what arguments. Your application decides whether to actually execute it. This matters for safety, validation, and authorization.
+- **Every additional round-trip adds latency.** A 5-step agent loop makes 5 sequential API calls. This is the cost structure that chapter 8 quantified — it bears repeating here because it is the axis on which agentic systems fail in production.
+
+## Writing good tool schemas
+
+If there is one sentence that captures the most important engineering decision in an agentic system, it is this: **the quality of your tool schemas determines the quality of your agent**.
+
+The model cannot see your codebase. It cannot read your documentation. Its only window into what your tools do is the schema you write. A vague schema produces bad tool selection. A precise schema produces good tool selection. The difference is not marginal — it is the gap between an agent that works in production and one that fails in ways you attribute to "the model."
+
+A tool schema has three parts that you control:
+
+**The name.** Tool names should make the verb and the object clear. `search_flights` and `book_flight` are good: they name distinct actions, and the verb carries meaning. `flights1` and `flights2` are bad: they are opaque to the model. The name is part of the selection signal — use it.
+
+**The description.** The most important part. The description should answer two questions the model is implicitly asking: "When would I call this?" and "What does it return?" If your description only answers one of those, your schema is incomplete.
+
+**The parameter schema.** Parameter descriptions should include format expectations and examples, not just type names. `"date": "string"` tells the model the type. `"date": "string (ISO 8601, e.g. '2026-05-24')"` tells the model the format and gives it a concrete example to mirror.
+
+Here is the same tool described well and badly, side by side:
+
+**Bad schema:**
+
+```json
+{
+  "name": "get_weather",
+  "description": "Weather.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "city": {"type": "string"},
+      "date": {"type": "string"}
+    },
+    "required": ["city", "date"]
+  }
+}
+```
+
+**Good schema:**
+
+```json
+{
+  "name": "get_weather",
+  "description": "Get the current or forecast weather for a city on a specific date. Returns temperature in Celsius, a conditions string (e.g. 'Sunny', 'Light rain'), and precipitation chance as a percentage. Use this when the user asks about weather for a specific location.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "city": {
+        "type": "string",
+        "description": "The city name, e.g. 'Tokyo', 'London', 'New York'"
+      },
+      "date": {
+        "type": "string",
+        "description": "The date to get weather for, in YYYY-MM-DD format, e.g. '2026-05-24'. Use today's date for current conditions."
+      }
+    },
+    "required": ["city", "date"]
+  }
+}
+```
+
+The good schema adds roughly 60 tokens. Those tokens directly reduce tool-selection errors and argument hallucinations. In a system that makes thousands of calls per day, the cost of 60 extra tokens is trivially small compared to the cost of recovering from tool-selection failures.
+
+The sim below makes this concrete. It shows a toolbox of four tools — `get_weather`, `search_flights`, `book_flight`, and `get_calendar_events` — with four real query scenarios. You can toggle between the good and bad schema versions and watch how the model's reasoning and tool selection change.
+
+<PredictGate
+  concept="tool-schema-design"
+  question="The sim toggles between good and bad schemas across the same 4 query scenarios. Before unlocking: predict which of the 4 scenarios you think will fail (wrong tool, hallucinated args, or missed parallel call) under bad schemas. List them in order from most likely to fail to least likely to fail, and explain why."
+  hint="Think about which queries require the model to distinguish between similar tools, generate arguments it cannot derive from the query text, or recognize that two calls can happen simultaneously. Where is schema quality most load-bearing?"
+>
+  <ToolSelectionExplorer />
+</PredictGate>
+
+Let's walk through all four queries and integrate what the sim shows.
+
+**Query 1 — Clean match ("What's the weather in Tokyo tomorrow?").** Both schema versions get this right. The query is unambiguous: only one tool is plausibly relevant, the tool name is obvious, and the required arguments are explicit in the query text. Schema quality does not matter when the match is this clean. This is an important baseline: bad schemas do not always fail — they fail when disambiguation is needed.
+
+**Query 2 — Ambiguous selection ("I want to fly to Paris next week").** This is where bad schemas produce a real production failure. Under good schemas, the model reasons: "The user wants to fly. `search_flights` explicitly says 'Does NOT book the flight.' I should search first, then book after the user confirms." Under bad schemas, `book_flight` is described only as "Flight booking." The model reads the user's intent ("I want to fly") and concludes the booking tool is the right match — calling it directly, skipping the search step entirely, and charging the user for a flight they never reviewed. **This is not a theoretical risk. In production, bad schema descriptions would actually charge a real user's payment method for an unconfirmed booking.** The distinction between search and book is load-bearing, and the only place it lives is in the schema descriptions.
+
+**Query 3 — Missing context ("Book the cheapest flight").** Under good schemas, the model recognizes that `book_flight` requires a `flight_id` parameter that comes from a prior `search_flights` call — the description says so explicitly. The user has not searched yet; no valid flight ID exists. The model asks for clarification rather than inventing an argument. Under bad schemas, the parameter is listed only as `id: string`. The model has no reason to know that IDs are derived values; it hallucinate `id="cheapest"` as a plausible argument and attempts to call `book_flight` with a non-existent flight ID. The failure here is argument hallucination, not wrong tool selection — and the root cause is a parameter description that omits provenance.
+
+**Query 4 — Parallel opportunity ("What's my schedule tomorrow and the weather?").** Under good schemas, the model correctly identifies that `get_calendar_events` and `get_weather` are independent — neither result depends on the other — and calls them in the same round-trip. One API call, two tool results, half the latency. Under bad schemas, the model misses this opportunity and calls them sequentially: calendar first, then weather in a second round-trip. The schema descriptions did not signal independence clearly enough. This failure mode costs users latency on every request of this type — not a correctness failure, but a silent performance failure that compounds at scale.
+
+The pattern across all four: schema quality is most critical when the model needs to choose between similar tools, when argument provenance must be explicit, or when the model needs to recognize that calls are independent. For clean, unambiguous queries, schema quality barely matters. For everything else, it is the primary determinant of agent quality.
+
+## When the LLM picks the wrong tool
+
+Even with well-written schemas, tool selection fails in predictable ways. Knowing the failure modes lets you diagnose problems from symptoms rather than having to trace every failing query.
+
+**Symptom: the model calls a tool in the wrong order.** The model calls `book_flight` before calling `search_flights`. The model calls `send_email` before `compose_email`. Wrong-order calls almost always trace to schema descriptions that do not make sequencing dependencies explicit. The fix: add to the description of any tool that requires prior state — "Only call this after [prerequisite tool] has returned a result" — and in the parameters, note which fields come from which prior call.
+
+**Symptom: hallucinated arguments.** The model produces well-formatted JSON with argument values that look plausible but are wrong — a date in the wrong format, an enum value that does not exist, an ID that was invented rather than derived from a prior call. Root cause: parameter descriptions that specify type but not format, valid values, or provenance. Fix: expand parameter descriptions to include examples, valid enum values, and explicit notes like "value must come from `search_flights` response."
+
+**Symptom: the model ignores some tools entirely.** You have 20 tools; the model consistently uses 8 of them and never reaches for the other 12. This is tool overload. Practitioners report consistent degradation in tool-selection quality past approximately 15-20 tools in context. The model begins to favor the tools it encountered earliest in the schema list, or the ones whose names are lexically closest to the query. Tools with similar-sounding descriptions start collapsing into each other in the model's representation.
+
+The fix for tool overload is architecture, not prompt tuning. Two approaches work:
+
+- **Hierarchical tool registry.** Present the model with a small set of category-level tools first (`billing_tools`, `account_tools`, `technical_tools`). Once the model selects a category, load only the tools in that category for the next call. This keeps the active tool count at 5-8 regardless of total tool count.
+- **Query routing before tool loading.** Apply the query-routing pattern from chapter 10 to subset the active tools before the agent call. A fast classifier determines query intent; the agent is instantiated with only the 5-10 tools relevant to that intent class.
+
+**Symptom: tools with overlapping semantics confuse the model.** You have `get_user_info` and `fetch_account_details` that partly overlap in what they return. The model alternates between them inconsistently, sometimes calling both for the same data. The fix is to make one authoritative and sunset the other, or to make the distinction crisp in the descriptions: "Use `get_user_info` for profile data (name, email, preferences). Use `fetch_account_details` for billing and subscription data (plan, payment method, invoice history)."
+
+The diagnostic question for any tool-selection failure: "Could a new engineer on my team, given only the tool schemas and a query, pick the right tool with high confidence?" If the answer is no, the model cannot pick it reliably either. Schema quality is a team-legibility problem as much as it is a model-capability problem.
+
+## Calling many tools at once
+
+Modern LLM APIs can return multiple tool calls in a single response. When the model recognizes that two or more calls are independent — neither result is needed to formulate the other call — it can batch them into one response, your code executes them in parallel, and all results return in a single round-trip.
+
+**Why this matters: latency.** A user asks "What's my schedule tomorrow and the weather forecast?" In a sequential model: the agent calls `get_calendar_events`, waits for the result, then calls `get_weather`. Two network round-trips, two API calls, wall-clock latency adds up. In a parallel model: the agent calls both tools in the same response, your code fires both calls concurrently, both results arrive together, and the model synthesizes the answer. One round-trip. Half the latency for the user.
+
+The latency reduction is proportional to how many independent calls can be batched. A query that decomposes into 4 independent tool calls drops from 4x sequential latency to roughly 1x (plus some parallelism overhead). For user-facing applications where every 100ms matters, this is significant.
+
+**How the model decides to parallelize.** The model needs to recognize that calls are independent — that the result of call A is not needed to formulate call B. Well-written schema descriptions help here: descriptions that make it clear what each tool returns, and parameter descriptions that make it clear what inputs each tool needs, allow the model to reason about data dependencies. If tool B's description says "Use this after `tool_a` returns a result," the model will not batch them. If neither description implies dependency, the model will batch them when the user query touches both domains.
+
+**API-level details.** Anthropic's API returns multiple tool-use blocks in a single response automatically when the model elects to parallelize — no flag needed. OpenAI's API requires `parallel_tool_calls=True` in some configurations (it is on by default in recent versions but can be disabled). In both cases, the response structure is the same: an array of tool calls, each with its own ID, name, and input. Your code collects all results and sends them back in a single `tool_result`-bearing turn.
+
+```python
+# Example: handling parallel tool calls from Anthropic's API
+import asyncio
+
+if response.stop_reason == "tool_use":
+    tool_calls = [b for b in response.content if b.type == "tool_use"]
+
+    # Execute all tool calls concurrently
+    async def execute_all(calls):
+        return await asyncio.gather(*[
+            execute_tool(c.name, c.input)
+            for c in calls
+        ])
+
+    results = asyncio.run(execute_all(tool_calls))
+
+    # Send all results back in one turn
+    messages.append({"role": "assistant", "content": response.content})
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": call.id,
+                "content": result
+            }
+            for call, result in zip(tool_calls, results)
+        ]
+    })
+```
+
+**Cost note.** Parallel tool calls do not reduce token cost — you pay for the same total input and output tokens whether the calls are sequential or parallel. What you save is wall-clock latency. For latency-sensitive applications, that is often the right trade.
+
+**One constraint.** Parallel calls work only when the calls are genuinely independent at the data level. If call B needs a value that call A returns, they cannot be parallelized — the model will make them sequential. Good schema design, by making data dependencies explicit, also makes independent-call opportunities legible to the model.
+
+## In practice
+
+The previous sections gave you the mechanism. This section gives you the numbers, the production patterns, and the failure modes that working engineers actually encounter when tool use meets real traffic.
+
+### The API primitives
+
+Both major APIs follow the same shape with different field names.
+
+**Anthropic** (`messages.create`):
+
+```python
+tools = [
+    {
+        "name": "tool_name",
+        "description": "...",
+        "input_schema": {              # note: "input_schema", not "parameters"
+            "type": "object",
+            "properties": {...},
+            "required": [...]
+        }
+    }
+]
+
+response = client.messages.create(
+    model="claude-opus-4-5",
+    max_tokens=1024,
+    tools=tools,
+    messages=messages
+)
+```
+
+**OpenAI** (`chat.completions.create`):
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_name",
+            "description": "...",
+            "parameters": {            # note: "parameters", not "input_schema"
+                "type": "object",
+                "properties": {...},
+                "required": [...]
+            }
+        }
+    }
+]
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    tools=tools,
+    messages=messages,
+    parallel_tool_calls=True
+)
+```
+
+The wire format differs in two places: the schema field is `input_schema` in Anthropic and `parameters` in OpenAI, and tool calls are wrapped in a `type: "function"` envelope in OpenAI. Both are stable as of 2026 and work with all current models in their respective families. When writing provider-agnostic abstractions, these two differences are the only field-level normalization needed.
+
+### Schema validation matters more than you think
+
+When the model returns a `tool_call`, it has produced a JSON object of arguments. That JSON object may be syntactically valid but semantically wrong: an enum value that does not exist in your system, a date string in the wrong format, a numeric value out of your allowed range, a required field that was silently omitted.
+
+The right architecture: validate the model's arguments against your JSON schema **before executing the tool**. If validation fails, return a descriptive error as a `tool_result` — something like `"Error: 'date' must be in YYYY-MM-DD format, got '2026/05/24'. Please retry with the correct format."` The model will read this error and almost always self-correct on the next call.
+
+Without this validation layer, your tool implementations must defensively handle every malformed input — or they fail at the execution layer with an error that is harder to trace back to the schema-level cause. Build the validation gate once; it makes every tool implementation simpler.
+
+A good validation gate in Python:
+
+```python
+import jsonschema
+
+def execute_with_validation(tool_name, tool_input, tools_by_name):
+    schema = tools_by_name[tool_name]["input_schema"]
+    try:
+        jsonschema.validate(tool_input, schema)
+    except jsonschema.ValidationError as e:
+        return f"Argument validation failed: {e.message}"
+    return execute_tool(tool_name, tool_input)
+```
+
+### The 20-tool rule
+
+Practitioners consistently report tool-selection quality degrading past approximately 15-20 tools in context. The symptoms: the model starts confusing similar tools, ignores less prominent tools, or picks slower/more expensive paths when cheaper ones exist.
+
+The root cause is not a hard limit — it is a soft phenomenon in how attention spreads across many schema descriptions. With 5 tools, every description gets weight. With 25 tools, less prominent ones get progressively less consideration, especially when their names are not the lexical closest match to the query.
+
+Two architectural patterns mitigate this without reducing the total number of tools your system supports:
+
+**Hierarchical registry:** The model's first call picks a tool category. The second call picks a specific tool within that category. Total tools in any single call: 5-8. Total tools in the system: unlimited.
+
+**Pre-call routing:** Use a fast classifier (rule-based or a small model) to subset the active tools before the agent call. A billing query loads billing tools; a technical query loads technical tools. The agent sees 5-10 tools; your system has 60.
+
+Both approaches add one extra step. That step is cheap (a fast classifier call, or a small API call for category selection) and pays for itself in improved tool-selection accuracy.
+
+### Tool result formatting
+
+The result you pass back to the model after a tool call is text — or structured data serialized as text. The model reads it, incorporates it into its reasoning, and proceeds.
+
+Long results balloon context. A tool that returns "here are 50 search results with full text" adds thousands of tokens to every subsequent call in the loop, at full input-token cost. Those tokens consume context window and increase cost per step linearly.
+
+The right pattern: summarize tool results before passing them back. Return the 3-5 most relevant results with key fields only, not the full payload. Return aggregated statistics rather than raw rows. Return a structured excerpt rather than the full document.
+
+This benefits both cost and quality. Shorter tool results leave more context window for the current conversation and earlier steps in the loop. More focused results also improve the model's reasoning — a model reading 5 focused results synthesizes better than one reading 50 noisy ones.
+
+### The MCP standard
+
+Anthropic's Model Context Protocol (MCP), which reached broad adoption in 2024-2025, is becoming the cross-provider standard for how agents discover and call tools. In the MCP model: tool definitions live on servers that expose a standard interface. Clients — Claude Desktop, Cursor, custom agent frameworks — discover tools from servers dynamically at runtime rather than having them hardcoded in the application.
+
+For agent projects that expect to run for years and connect to many external services, MCP is worth adopting. It decouples tool definitions from client code, allows tools to be versioned and updated independently, and enables tool reuse across multiple agent applications. For a short-lived prototype or a tightly scoped tool set, the overhead is not worth it — direct API integration is simpler.
+
+The practical note for 2026: the major AI-native IDEs (Cursor, Windsurf, Claude Code) and desktop assistants all speak MCP natively. If your agent needs to run in those environments, MCP is the right integration target.
+
+### The single highest-leverage tool-use trick
+
+Write the tool description from the **model's perspective**, not the documentation writer's perspective.
+
+A documentation writer asks: "What does this function do?" A model asks: "When would I call this, and when would I not?"
+
+**Bad:** "Get user account information."
+
+**Good:** "Get a user account by user ID. Use this tool when you need to look up a single user's profile data — email, display name, account status, and subscription plan. Do not use this for billing history or payment information (use `get_billing_info` for that). Returns null if the user ID does not exist."
+
+The good version answers the model's actual question: when do I call this, what does it return, and what are the edge cases? The bad version answers the documentation writer's question: what does this do? These are different questions, and only one of them is useful to a model deciding which tool to call.
+
+When reviewing schemas, ask yourself: "If I were an LLM seeing these descriptions for the first time, with no other context, could I pick the right tool for a query?" If not, rewrite until the answer is yes.
+
+### The failure mode you will see in production
+
+> "Our agent calls tools but the quality is terrible — it's calling the wrong tools almost half the time."
+
+Almost always: bad schema descriptions. The failure is not a model capability problem. It is an information problem: the model does not have enough information in the schemas to make the right decision.
+
+The diagnostic process: have two or three engineers read only the tool schemas — no codebase access, no additional context — and pick tools for a sample of 20 real production queries. Measure inter-annotator agreement. If humans cannot consistently pick the right tool from the schemas alone, the model cannot either.
+
+Iterate descriptions until human agreement on the schema-only task is high. Then re-run the agent. Tool-selection quality almost always improves proportionally.
+
+This is not just theory. Teams that do schema cold-reads as part of their development process consistently report fewer tool-selection bugs in production. It is a cheap, fast feedback loop that catches ambiguous schemas before they affect users.
+
+### Where tool use fits in the bigger system
+
+Every chapter in the Agents module builds on the loop introduced in this chapter:
+
+```
+user query → [agent loop:
+  LLM(tools, query) → returns tool_call(s) →
+  [validate args] → [execute tools, possibly in parallel] →
+  [format results] → LLM(tools, query, results) → ...]
+→ final answer
+```
+
+Structured outputs (the next chapter) govern how the model formats its responses at the tool-call and final-answer level. The ReAct pattern (chapter 8, extended in later chapters) is the reasoning structure the model applies inside each `LLM(...)` call. Error handling and retry logic live between `[validate args]` and `[execute tools]`. Agent evals measure the quality of the whole loop end to end.
+
+This is the primitive. Every other Agents-module concept is either a way to improve what happens inside the loop (better schemas, better reasoning) or a way to manage the loop's costs (step limits, parallel calls, query routing). Get the loop right first; the sophistications layer on cleanly once the foundation is solid.
+
+## Recall — interview style
+
+The questions below are the kind that come up in real AI engineering interviews and system design reviews. They are scenario-based: you are given a specific situation, constraints, and must reason from principles. What is evaluated is whether you identify the right tradeoffs, propose specific (not generic) actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="tool-selection"
+  question="**Production debug.** Your agent's tool-selection accuracy dropped 30% after a recent deploy. The only change: you added 4 new tools, bringing the total from 14 to 18. Walk through what likely happened mechanically, how you would confirm the hypothesis (what logs or metrics would you pull?), and the three concrete things you would try to recover accuracy without removing the new tools."
+/>
+
+<RecallPrompt
+  concept="tool-schema-design"
+  question="**Design choice.** You're building a customer-support agent with access to 60 internal tools spanning four domains: billing (15 tools), account management (12 tools), technical support (20 tools), and policy lookups (13 tools). Each customer query touches 1-3 tools within one domain. Walk through your architecture for tool loading: do you include all 60 tools in every agent call? If not, describe the structure you'd use, the latency implications of each layer, and how you'd handle queries that span domain boundaries."
+/>
+
+<RecallPrompt
+  concept="parallel-tool-calls"
+  question="**Cost vs quality.** Your agent currently calls tools sequentially. p50 latency is 4 seconds; traces show two independent tool calls per query on average (one for user data, one for account data). You are considering enabling parallel tool calls. Quantify the expected p50 latency improvement. Describe the two risks that parallel execution introduces that sequential execution does not. Identify one schema change you would make to help the model recognize when calls are safe to parallelize."
+/>
+
+<RecallPrompt
+  concept="tool-schema-design"
+  question="**Senior eng pushback.** A teammate writes the description for a `do_thing` tool as: 'Performs the operation.' Push back on this description in a code review. Explain specifically why it will cause production failures. Rewrite the description to production quality, inventing plausible specifics about what the tool does, and call out the three elements your rewrite includes that the original lacks."
+/>
+
+<RecallPrompt
+  concept="function-calling"
+  question="**Failure-mode trace.** Your agent calls the right tool 90% of the time. In the other 10%, it produces well-formatted JSON arguments that fail at runtime — invalid enum values, malformed date strings, out-of-range numbers. The model is not calling the wrong tool; it is generating syntactically valid but semantically wrong arguments. Identify where in your pipeline the right architectural fix sits, describe exactly what it does, and explain why implementing it at the tool-execution layer rather than the schema layer is the wrong call."
+/>
