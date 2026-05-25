@@ -1,0 +1,355 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: system-ui, sans-serif;
+  max-width: 1100px;
+}
+
+.title {
+  margin: 0 0 1rem;
+  font-size: 1.05em;
+  font-weight: 700;
+  color: #111827;
+}
+
+.sectionTitle {
+  margin: 0 0 0.6rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Summary panel ─────────────────────────────────────────────────────── */
+
+.summaryPanel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.6rem;
+}
+
+@media (max-width: 800px) {
+  .metricsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 500px) {
+  .metricsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.metricCard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metricOutlier {
+  border-color: #fca5a5;
+  background: #fff7f7;
+}
+
+.metricLabel {
+  font-size: 0.72em;
+  color: #6b7280;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metricValue {
+  font-size: 1.1em;
+  font-weight: 700;
+  font-family: monospace;
+  color: #111827;
+}
+
+.summaryNote {
+  font-size: 0.75em;
+  color: #9ca3af;
+  margin: 0.5rem 0 0;
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.filterGroup,
+.sortGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.controlLabel {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.buttonGroup {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.filterBtn {
+  padding: 0.3em 0.7em;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: white;
+  font-size: 0.8em;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.filterBtn:hover {
+  background: #f3f4f6;
+}
+
+.filterBtnActive {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: white;
+}
+
+.sortSelect {
+  padding: 0.3em 0.5em;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.82em;
+  color: #374151;
+  background: white;
+}
+
+/* ── Trace list ──────────────────────────────────────────────────────────── */
+
+.traceList {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.traceListHeader {
+  display: grid;
+  grid-template-columns: 90px 1fr 120px 70px 70px 1fr;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.75em;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+}
+
+.traceRow {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid #e5e7eb;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.traceRow:last-child {
+  border-bottom: none;
+}
+
+.traceRow:hover {
+  background: #fafafa;
+}
+
+.traceRowExpanded {
+  background: #f9fafb;
+}
+
+.traceRowMain {
+  display: grid;
+  grid-template-columns: 90px 1fr 120px 70px 70px 1fr;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  align-items: center;
+}
+
+.traceId {
+  font-family: monospace;
+  font-size: 0.78em;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.traceQuery {
+  font-size: 0.82em;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  padding: 0.2em 0.5em;
+  border-radius: 999px;
+  font-size: 0.75em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badgeSuccess {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badgeWrong {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badgeStepLimit {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.traceSteps {
+  font-size: 0.82em;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.traceCost {
+  font-family: monospace;
+  font-size: 0.82em;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.toolChips {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.toolChip {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-size: 0.7em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Trace detail (expanded) ─────────────────────────────────────────────── */
+
+.traceDetail {
+  padding: 0.75rem 1rem 1rem;
+  background: white;
+  border-top: 1px solid #e5e7eb;
+}
+
+.traceDetailHeader {
+  font-size: 0.85em;
+  color: #111827;
+  margin-bottom: 0.5rem;
+}
+
+.traceDetailMeta {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.8em;
+  color: #374151;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.stepList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stepCard {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+}
+
+.stepNumber {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+}
+
+.stepSection {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-top: 0.25rem;
+  font-size: 0.8em;
+}
+
+.stepLabel {
+  font-weight: 700;
+  color: #6b7280;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.stepThought {
+  color: #374151;
+  font-style: italic;
+}
+
+.stepAction {
+  background: #ede9fe;
+  color: #4c1d95;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.stepObservation {
+  color: #059669;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
+.emptyState {
+  padding: 1.5rem;
+  text-align: center;
+  font-size: 0.85em;
+  color: #9ca3af;
+}
