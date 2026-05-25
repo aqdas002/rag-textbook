@@ -1,0 +1,359 @@
+---
+id: structured-outputs
+title: Structured outputs
+estimatedMinutes: 25
+concepts: [structured-outputs, schema-strictness, schema-design-for-llms, output-validation-loop]
+prerequisites: [function-calling]
+---
+
+import { ValidationRetryLoop } from '@sims/ValidationRetryLoop'
+import { PredictGate, RecallPrompt } from '@/components'
+
+## From tool use to structured outputs
+
+Chapter 11 showed the tool-use loop: the LLM decides which function to call and what arguments to pass; your code runs it; the result feeds back in. That loop is how the LLM **acts on the world** — write to a database, send an email, query an API.
+
+Structured outputs are the flip side of the same coin. Where tool use is about the LLM producing function-call arguments for your application to execute, structured outputs are about the LLM producing **data your code can consume directly** — a parsed object, not a prose paragraph.
+
+Both use JSON schemas as the contract. Both require the LLM to produce well-formed JSON. The difference is directionality: tool-use schemas describe what the LLM wants to call; structured-output schemas describe what shape you want the LLM to return. Once you have function calling, structured outputs are a short step — and a very useful one.
+
+## The schema as contract
+
+Structured outputs are the answer to a specific class of problem: any situation where your downstream code needs to do `response.priority` or `parsed["due_date"]` instead of `print(response)`.
+
+The canonical use cases: form-filling from natural-language input, document classification, named-entity extraction, multi-field data normalization, LLM-as-judge scoring. What they have in common — the code that consumes the result expects a specific shape, not free text.
+
+The schema is a contract. You specify the shape; the LLM fills it in. JSON Schema is the shared language that both sides understand. You write a schema like:
+
+```json
+{
+  "type": "object",
+  "required": ["task", "due_date", "priority"],
+  "properties": {
+    "task":     { "type": "string", "description": "Short task title, one line" },
+    "due_date": { "type": "string", "description": "ISO 8601 date, e.g. '2026-05-30'" },
+    "priority": { "type": "string", "enum": ["low", "medium", "high"] }
+  },
+  "additionalProperties": false
+}
+```
+
+And the LLM produces:
+
+```json
+{
+  "task": "Migrate database to Postgres 16",
+  "due_date": "2026-05-30",
+  "priority": "high"
+}
+```
+
+Your application code receives a typed object. No parsing ambiguity, no regex extraction, no "the LLM said 'the priority is high' somewhere in paragraph 3."
+
+**The two API surfaces you'll use.** On the OpenAI side: `response_format={"type": "json_schema", "json_schema": {...}}`. On the Anthropic side: there is no dedicated structured-output parameter — the canonical pattern is to define a single tool with the schema as its `input_schema` and pass `tool_choice={"type": "tool", "name": "your_tool"}`, which forces the LLM to call that tool (and therefore produce arguments matching your schema). Both approaches deliver a JSON object that you parse. The next section explains the critical difference between how strictly each approach enforces the schema.
+
+## Strict vs loose modes
+
+Not all structured output is created equal. There are two fundamentally different mechanisms for getting the LLM to produce schema-conforming JSON, and they differ in first-try success rate, cost, and which models support them.
+
+**Strict mode** (OpenAI's `strict: true`, Google Gemini's `response_schema` with `response_mime_type="application/json"`) constrains token generation at the inference engine level. The engine evaluates every token it samples against the schema and only allows tokens that keep the output on a valid path toward schema conformance. The LLM literally cannot produce invalid JSON, missing required fields, or enum values outside the allowed set. First-try success rate: ~100%. The tradeoff: not all schema features are supported (recursive schemas often fail; `oneOf`/`anyOf` have limited support), it can be slightly slower (~10%) because every token is evaluated against the schema, and sampling constraints occasionally affect output quality in subtle ways.
+
+**Loose mode / prompt-based** (any model, any provider — you ask for JSON matching the schema in your prompt) does not constrain generation. The LLM is asked to produce conforming JSON; it usually does, but "usually" is not "always." First-try success rate depends heavily on schema complexity and model strength: 99% for a 3-field flat schema on a strong model, down to 70-80% for deeply nested schemas on weaker models. When loose mode fails, you need the validate-and-retry loop (Section 4).
+
+The sim below makes both modes visible across four concrete scenarios.
+
+<PredictGate
+  concept="schema-strictness"
+  question="The sim has 4 scenarios: (1) strict mode with a capable model, (2) non-strict with a well-designed schema, (3) non-strict with an ambiguous schema, (4) non-strict with a complex nested schema and a weaker model. Before unlocking: predict the number of attempts and total cost for each scenario. Which scenario do you expect to need the most retries? Why?"
+  hint="Think about what's different between scenarios 2 and 3 — the model is the same, the strictness is the same. What changed? And between scenarios 3 and 4 — the schema problem is different. What makes schema complexity and model weakness compound?"
+>
+  <ValidationRetryLoop />
+</PredictGate>
+
+Here is what each scenario shows and why it matters.
+
+**Scenario 1 — Strict mode, capable model (1 attempt, $0.005).** The schema is enforced at the token level. There is no ambiguity about whether the output will conform: it structurally cannot deviate. Zero retries needed. This is the ceiling — when you can use strict mode, you get schema conformance for free and your validate-and-retry loop is just a belt-and-suspenders sanity check, not load-bearing infrastructure.
+
+**Scenario 2 — Non-strict, well-designed schema (1 attempt, $0.005).** A strong model given a clear schema — field types explicit, `due_date` absent from the `required` list so the optional omission is valid — passes on the first try even without engine-level enforcement. This is the key empirical observation: for a capable model and a schema that leaves no ambiguity about what each field should contain, you rarely need retries. Schema quality compensates substantially for the absence of strict mode.
+
+**Scenario 3 — Non-strict, ambiguous schema (2 attempts, $0.010).** The same capable model, without strict mode, with one change: `due_date` has no format hint in its description. The model produces `"due_date": "next Tuesday"` — perfectly sensible natural language, completely unusable by the downstream code expecting ISO 8601. One retry with the exact error message ("must be ISO 8601 YYYY-MM-DD") is sufficient. The root cause is not model weakness — it is schema ambiguity. The schema said `"type": "string"` with no further guidance. "Next Tuesday" is a string.
+
+**Scenario 4 — Non-strict, complex nested schema, weaker model (3 attempts, $0.015).** A weaker model with a deeply nested schema (an array of attendee objects, each requiring two fields). Attempt 1 misses a required field inside a nested object. Attempt 2 adds a stray field (`notes`) that `additionalProperties: false` prohibits. Attempt 3 gets it right. Three retries, 3x cost, 3x latency — for the same final output as scenario 1. The lesson is not "don't use weaker models" — it is that complexity and model strength interact. If you cannot use strict mode, flatten your schema and use a capable model before reaching for retry budgets.
+
+The takeaway from all four: **strict mode is the right default when you can use it.** When you cannot — provider doesn't support it, schema uses features strict mode doesn't handle, you're on Anthropic — your schema design matters more than your retry policy. A well-designed schema on a capable model approaches strict-mode reliability without the engine-level enforcement.
+
+## Schemas the LLM can actually fill
+
+JSON Schema was designed for machines validating data. LLMs are not machines — they are probabilistic text generators that happen to be very good at following instructions when those instructions are clear. Schema design for LLMs follows different rules than schema design for human-facing data validation.
+
+**Put descriptions on every field.** The `description` field in JSON Schema is read by the LLM at generation time. It is not metadata. It is an instruction. A field without a description gives the model no guidance on what to fill in, and hallucination rate rises accordingly. Every field gets a description; every description answers the model's implicit question: "What exactly do I put here?"
+
+**Use examples in descriptions.** `"date: ISO 8601 date string"` is better than `"date: string"`. `"date: ISO 8601 date string, e.g. '2026-05-30'"` is better still. The example anchors the model to the format you want and gives it a concrete token pattern to mirror. This single change eliminates the most common date-format failure (scenario 3 above).
+
+**Enums over free strings.** If a field has a small finite set of valid values, enumerate them. `"priority": {"type": "string", "enum": ["low", "medium", "high"]}` is dramatically more reliable than `"priority": {"type": "string"}`. Free strings let the model produce "urgent", "Urgent", "high-priority", "1", "CRITICAL" — all plausibly reasonable, all broken by the equality check your downstream code performs. Enums collapse to one canonical value.
+
+**Prefer flat schemas.** Flat schemas — one level of nesting at most — reliably outperform deep schemas. When you ask a model to fill a deeply nested structure, it must track the open/close structure of multiple nested objects simultaneously while also producing the right content. Errors compound with depth: a mistake in a nested array element (scenario 4) is harder for the model to self-correct because it has to track exactly where in the nesting hierarchy the error occurred. If you can flatten a nested structure into a parallel flat one — `attendee_names: ["Alice", "Bob"]` + `attendee_emails: ["alice@example.com", "bob@example.com"]` instead of an array of `{name, email}` objects — do it.
+
+**Be explicit about optional fields.** The LLM sometimes fills optional fields with hallucinated content "to be helpful." Two approaches work better than leaving the ambiguity open: omit truly optional fields from the schema entirely and parse them post-hoc from the prose response, or keep them in the schema and add to their description "leave this field out entirely if you don't have the information." Don't rely on the model to correctly infer that optional means "omit rather than invent."
+
+**Use `additionalProperties: false`.** Prevents the model from adding stray fields you didn't ask for — the `notes` failure in scenario 4. In strict mode, this is automatically enforced. In loose mode, specifying it and validating for it catches the model's occasional impulse to "add context" by including unrequested fields.
+
+The meta-principle: every failure mode in the sim above traces back to a schema that left something underspecified. The model filled in the ambiguity with a plausible answer that was wrong by your downstream standard. Remove the ambiguity; the model removes the error.
+
+## When validation fails
+
+Even with a well-designed schema and a capable model, loose-mode structured outputs will occasionally produce invalid JSON. The right architecture treats this as expected and handles it gracefully.
+
+The validate-and-retry loop:
+
+```python
+from jsonschema import validate, ValidationError
+import json
+
+def generate_structured(prompt: str, schema: dict, max_retries: int = 3) -> dict:
+    current_prompt = prompt
+    for attempt in range(max_retries):
+        output = llm.generate(current_prompt, response_format="json")
+        try:
+            parsed = json.loads(output)
+            validate(parsed, schema)  # pydantic, jsonschema, zod, etc.
+            return parsed
+        except json.JSONDecodeError as e:
+            error_msg = f"Your output was not valid JSON: {e}"
+        except ValidationError as e:
+            error_msg = f"Your output failed schema validation: {e.message}"
+
+        # Append the exact error — not just "try again"
+        current_prompt += f"\n\nYour previous output failed: {error_msg}. Return only a JSON object matching the schema, with no additional text."
+
+    raise MaxRetriesExceeded(f"Failed after {max_retries} attempts")
+```
+
+Three design decisions in this loop matter disproportionately:
+
+**Include the exact error in the retry prompt.** `"Your output was not valid JSON"` is almost useless. `"Your output failed validation: due_date must be ISO 8601 YYYY-MM-DD, got 'next Tuesday'"` tells the model exactly what to fix. The model is good at self-correction given precise feedback; it is not good at guessing what it did wrong from vague signals. Always pass the full validation error message.
+
+**Three retries is the typical ceiling.** If the model cannot produce a valid output after 3 attempts, additional retries rarely help. By attempt 4, you're likely dealing with a model that genuinely cannot satisfy the schema — either because the schema is too complex for the model, or because the input doesn't contain the information the schema requires. The right response is not more retries; it is escalation: switch to a stronger model, simplify the schema, or route to manual review.
+
+**Track retry rate as a production metric.** A retry rate above 5% on any schema is a signal that something is wrong — usually the schema design, not the model. If your retry rate is 18%, your schema has ambiguity that needs fixing (see Section 3). Retry rate is cheap to track and surfaces schema problems before they become cost problems.
+
+**Cost scales linearly with retries.** A 3-attempt average means 3x baseline cost and 3x latency for every query that hits the retry ceiling. For a high-volume extraction pipeline, a 2.3x average attempt count is visible in the cost line. The right intervention is fixing the schema, not accepting the multiplier.
+
+## In practice
+
+The previous sections gave you the mechanism. This section gives you the production patterns, provider specifics, and failure modes that working engineers actually encounter.
+
+### The API surface
+
+Each major provider has a slightly different surface for structured outputs. Check the docs for the model you're using — capabilities vary within provider families, not just across them.
+
+**OpenAI.** Two modes: strict and non-strict.
+
+```python
+# Strict mode — engine-level enforcement
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=messages,
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task_extraction",
+            "schema": your_schema,
+            "strict": True
+        }
+    }
+)
+parsed = json.loads(response.choices[0].message.content)
+
+# Non-strict — schema in prompt, json_object mode
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": f"Output a JSON object matching this schema: {json.dumps(your_schema)}"},
+        *messages
+    ],
+    response_format={"type": "json_object"}
+)
+```
+
+**Anthropic.** No strict mode as of 2026. The canonical pattern uses forced tool use:
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-5",
+    max_tokens=1024,
+    tools=[{
+        "name": "extract",
+        "description": "Extract structured data from the input.",
+        "input_schema": your_schema
+    }],
+    tool_choice={"type": "tool", "name": "extract"},
+    messages=messages
+)
+# The model is forced to call "extract"; its arguments are your structured output
+tool_input = response.content[0].input
+```
+
+**Google Gemini.** Strict-mode-equivalent via `response_schema`:
+
+```python
+response = model.generate_content(
+    prompt,
+    generation_config=genai.GenerationConfig(
+        response_mime_type="application/json",
+        response_schema=your_schema
+    )
+)
+parsed = json.loads(response.text)
+```
+
+Each provider has subtle schema-feature differences — Gemini's strict mode has constraints on `anyOf` and doesn't support all JSON Schema keywords; OpenAI strict mode requires `additionalProperties: false` to be set explicitly; Anthropic's tool-use approach processes the schema as a tool parameter definition rather than a response schema. Always test with the specific model+schema combination you intend to deploy.
+
+### What strict mode buys you
+
+Strict mode eliminates an entire category of failures:
+
+- JSON parsing errors: impossible (the engine cannot produce non-JSON tokens)
+- Missing required fields: impossible (the engine tracks required fields during generation)
+- Invalid enum values: impossible (only allowed enum tokens are sampled)
+- Wrong types: impossible (array vs object vs string is enforced at generation time)
+
+What it does not eliminate: semantic errors where the field is structurally valid but semantically wrong ("due_date" is a valid ISO date but it's a year in the past; "priority" is "low" when the correct answer is "high"). Strict mode guarantees schema conformance, not correctness of content.
+
+Trade-offs to know: not all schema features are supported — recursive schemas typically fail, `oneOf`/`anyOf` have limited support in most implementations, very large schemas with hundreds of properties can cause issues. Sampling is constrained, which occasionally affects phrasing quality in string fields. Throughput can be ~10% lower because each token is evaluated against the schema. None of these are reasons to avoid strict mode — they are reasons to test your specific schema before deploying.
+
+### The two-library stack
+
+Production Python code for structured outputs typically uses two libraries together:
+
+**Pydantic** for schema definition:
+
+```python
+from pydantic import BaseModel
+from typing import Literal
+
+class TaskExtraction(BaseModel):
+    task: str
+    due_date: str  # ISO 8601
+    assignee: str
+    priority: Literal["low", "medium", "high"]
+
+# Generate the JSON schema to pass to the API
+schema = TaskExtraction.model_json_schema()
+```
+
+**jsonschema** (or Pydantic's own validation) for validating the response:
+
+```python
+# Option 1: validate via Pydantic model (validates and parses in one step)
+result = TaskExtraction.model_validate_json(raw_response)
+
+# Option 2: validate raw dict before constructing
+import jsonschema
+parsed = json.loads(raw_response)
+jsonschema.validate(parsed, schema)
+result = TaskExtraction(**parsed)
+```
+
+The advantage of this stack: the schema definition is the ground truth. It lives in one place (the Pydantic model), generates the API schema automatically, and validates the response. You don't maintain a separate schema document; you maintain a Python class.
+
+For TypeScript, the equivalent stack is **zod** for schema definition and validation, with `z.toJSONSchema()` (or equivalent) to generate the JSON schema for the API.
+
+### Retry policy in production
+
+The retry policy that appears in most production systems:
+
+- **Maximum retries: 3.** Standard ceiling. Retry 1 catches the common slip; retry 2 catches edge-case ambiguity; retry 3 is the escalation trigger.
+- **Backoff: minimal.** Unlike network retries (which back off to avoid thundering herd), LLM retries are almost instantaneous — you're making a new API call immediately with the corrected prompt. A small delay (100-200ms) between retries is fine; exponential backoff is not necessary for this failure mode.
+- **Escalation at retry limit.** Three options: stronger model for attempt 4 (if cost allows), simplified schema on retry (remove optional fields and ask again), or fail gracefully and route to a queue for human review.
+- **Metric to track: retry rate.** If retry rate on a given schema exceeds 5%, investigate the schema. Budget target: total cost per successful output should not exceed 4x baseline (which allows for 3 retries at 1x each with overhead).
+
+### The single highest-leverage structured-output trick
+
+**Use enums for every field with a small finite set of values.**
+
+This bears emphasis because the cost of not doing it is invisible until you're in production debugging why your downstream system intermittently breaks.
+
+A `priority: string` field can produce: "low", "Low", "LOW", "low priority", "low-priority", "1", "minor", "not urgent", "can wait". All of these are semantically "low priority." None of them are equal to "low" by string comparison. Your switch statement breaks. Your database insert fails. Your sort order is wrong.
+
+A `priority: enum ["low", "medium", "high"]` field produces exactly one of those three strings, every time. The model's job becomes selection among known options, not generation of arbitrary text. Reliability goes up; downstream fragility goes to zero.
+
+The cost of adding an enum is one line of schema definition. The cost of not adding it is intermittent production failures that take time to trace back to their source.
+
+### When NOT to use structured outputs
+
+Not every LLM output should be structured. The test: does your downstream code do `response.field` access? If yes, use structured output. Does your downstream code do `print(response)` or stream the text to a user? If yes, don't.
+
+Forcing structure onto genuinely free-form tasks degrades output quality. A chat response that works best as flowing prose should not be shoehorned into `{"response": "..."}`. A code generation result that will be inserted into a file does not need a wrapper schema. Creative writing with a schema constraint produces worse writing.
+
+The cost of forcing unnecessary structure: slightly degraded output quality (the model is spending some of its capacity tracking schema compliance instead of generating the best possible content), unnecessary validation complexity, and misleading downstream expectations that `response.field` is always safe to access.
+
+Rule of thumb: structure the outputs that need to be consumed programmatically. Leave free everything else.
+
+### The failure mode you will see in production
+
+> "Our extraction pipeline works on the first 100 examples but fails on the 101st."
+
+This is the canonical structured-output production failure. It almost always traces to a long-tail edge case the schema did not anticipate:
+
+- A document in a language the model renders dates differently in — `"May 30, 2026"` instead of `"2026-05-30"`.
+- An input where a required field is genuinely absent from the source material, so the model invents a plausible value rather than erroring.
+- A field the schema marks required that only exists in 99 of every 100 documents; the 100th fails validation every time.
+- An input that causes the model to add an extra explanatory field that your downstream parser didn't account for.
+
+The mitigation is a combination of:
+1. **The validation loop** — catches malformed outputs; exact error messages guide self-correction.
+2. **A clear escalation path** — when retries exhaust, the output goes to a queue for manual review rather than silently propagating a wrong value.
+3. **Monitoring on which inputs fail** — the distribution of failures tells you which schema fields or input types need adjustment.
+
+The failure that *looks* like a model failure is almost always a schema design failure. The schema didn't anticipate the 101st example; the model filled the ambiguity the only way it could.
+
+### Where structured outputs fit in the bigger system
+
+```
+user input → [LLM with strict mode or validate-and-retry loop] →
+  [parsed object: Pydantic / zod] → [your application code]
+```
+
+This is the bridge between LLM probability distributions and deterministic application code. Without structured outputs, every consumer of LLM output has to handle ambiguous text — parse it, normalize it, guess at its structure. With structured outputs, the LLM is a typed function: you pass it a schema and an input, it returns an object that conforms to the schema. Your application code can rely on that conformance the same way it relies on a database query returning the column types it declared.
+
+In the context of the full agent loop from Chapter 11:
+
+```
+user query → [agent loop:
+  LLM(tools, query) → tool_call(args) →       ← tool-use schemas (Ch 11)
+  [execute tools] → results →
+  LLM(results) → structured_output(schema) →  ← structured-output schemas (Ch 12)
+  [parsed object]] → final answer
+```
+
+Tool-use schemas govern what the LLM calls. Structured-output schemas govern what the LLM returns. In practice, a single agent loop often uses both: tools to gather data, structured outputs to return the synthesized result in a form the calling application can work with. The schema-as-contract principle is the same in both cases.
+
+## Recall — interview style
+
+The questions below are scenario-based, the kind that come up in AI engineering interviews and system design reviews. What is graded: whether you identify the right tradeoffs, propose specific actions, and flag failure modes before they happen.
+
+<RecallPrompt
+  concept="schema-strictness"
+  question="**Design choice.** You're building an extraction pipeline that pulls structured data (10 fields, some nested) from user-uploaded contracts. You can use OpenAI (strict mode supported) or Anthropic (no strict mode as of 2026). Walk through your decision: What factors does it hinge on? If you choose Anthropic, what compensates for the absence of strict mode? If you choose OpenAI strict mode, name one schema constraint you'll need to verify is supported before deploying."
+/>
+
+<RecallPrompt
+  concept="schema-design-for-llms"
+  question="**Production debug.** Your extraction pipeline retry rate is 18%. The acceptable target is under 5%. The schema looks fine to humans — all required fields are present, types are correct. Walk through how you'd diagnose the root cause. What specific things would you look at in the failing cases? What schema changes would you make, and what metric would you use to confirm the fix worked?"
+/>
+
+<RecallPrompt
+  concept="output-validation-loop"
+  question="**Cost vs quality.** Your CFO flags that your extraction pipeline is costing 2.3x what the baseline single-attempt cost should be. Investigation shows average 2.3 attempts per call. The pipeline works — final outputs are valid — but the retry cost is real money at scale. Walk through the specific changes you'd make to bring average attempts below 1.2. What would you look at first, and in what order?"
+/>
+
+<RecallPrompt
+  concept="schema-design-for-llms"
+  question="**Senior eng pushback.** A teammate proposes `\"priority\": {\"type\": \"string\"}` for a field with three valid values: low, medium, and high. This is in a schema that will run against 500,000 documents per day. Push back. Explain specifically what failures this design choice produces at scale, why a string type appears safe in testing but fails in production, and what the fix is."
+/>
+
+<RecallPrompt
+  concept="structured-outputs"
+  question="**Failure-mode trace.** Your structured output pipeline works in eval. In production, you find that roughly 2% of outputs contain an extra field — `metadata: {}` — that you never asked for, and your downstream pipeline's strict parser throws on it. Trace the root cause. What should you have included in the schema to prevent this? What is the immediate fix to deploy without retraining or changing the model?"
+/>
