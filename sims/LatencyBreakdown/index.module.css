@@ -1,0 +1,122 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88em;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+}
+
+.total {
+  margin-left: auto;
+  font-size: 0.88em;
+  color: #374151;
+}
+
+.barContainer {
+  position: relative;
+}
+
+.bar {
+  display: flex;
+  height: 44px;
+  border-radius: 4px;
+  overflow: visible;
+  position: relative;
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.segment:first-child { border-radius: 4px 0 0 4px; }
+.segment:last-child { border-radius: 0 4px 4px 0; }
+
+.segLabel {
+  font-size: 0.72em;
+  color: white;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.firstTokenMarker {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.markerLine {
+  width: 2px;
+  height: 44px;
+  background: #111827;
+}
+
+.markerLabel {
+  font-size: 0.7em;
+  color: #111827;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1.2;
+  margin-top: 2px;
+  font-weight: 600;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin-top: 0.6rem;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legendText {
+  font-size: 0.78em;
+  color: #6b7280;
+}
+
+.caption {
+  font-size: 0.85em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.5rem;
+  font-style: italic;
+}

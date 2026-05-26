@@ -1,0 +1,47 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 0.9em;
+  color: #374151;
+  min-width: 3rem;
+}
+
+.slider {
+  flex: 1;
+  min-width: 120px;
+  max-width: 300px;
+  accent-color: #7c3aed;
+}
+
+.stats {
+  font-size: 0.85em;
+  color: #374151;
+}
+
+.caption {
+  font-size: 0.85em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
