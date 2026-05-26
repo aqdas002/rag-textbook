@@ -1,0 +1,150 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.query {
+  font-size: 0.9em;
+  color: #374151;
+}
+
+.toggleBtn {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82em;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.toggleBtn:hover {
+  background: #f3f4f6;
+}
+
+.toggleBtn.active {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #5b21b6;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+@media (max-width: 600px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.column {
+  border-radius: 4px;
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+}
+
+.withoutCol {
+  border-top: 3px solid #ef4444;
+}
+
+.withCol {
+  border-top: 3px solid #22c55e;
+}
+
+.colTitle {
+  margin: 0 0 0.5rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #111827;
+}
+
+.chunkBox {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  padding: 0.5rem 0.65rem;
+  font-family: monospace;
+  font-size: 0.78em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 0.5rem;
+}
+
+.headerPrefix {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.scoreRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.scoreBadge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.78em;
+  font-weight: 600;
+}
+
+.retrievedBadge {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #374151;
+}
+
+.llmBox {
+  margin-top: 0.75rem;
+  border: 1px solid #fca5a5;
+  background: #fff7f7;
+  border-radius: 4px;
+  padding: 0.5rem 0.65rem;
+}
+
+.llmSuccess {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.llmLabel {
+  font-size: 0.72em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin-bottom: 0.3rem;
+}
+
+.llmText {
+  font-size: 0.82em;
+  color: #1f2937;
+  margin: 0;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.caption {
+  font-size: 0.82em;
+  color: #6b7280;
+  margin: 0.75rem 0 0;
+  font-style: italic;
+}

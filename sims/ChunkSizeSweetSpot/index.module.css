@@ -1,0 +1,43 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.sliderLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88em;
+  color: #374151;
+  flex: 1;
+  min-width: 220px;
+}
+
+.slider {
+  flex: 1;
+}
+
+.statusBadge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.82em;
+  font-weight: 600;
+  white-space: nowrap;
+}
