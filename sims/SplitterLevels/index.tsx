@@ -132,12 +132,12 @@ export function SplitterLevels() {
               background: `${CHUNK_COLORS[chunkIndex % CHUNK_COLORS.length]}12`,
             }}
           >
-            {chunks[chunkIndex].label && (
+            {chunks[chunkIndex]?.label && (
               <span
                 className={styles.chunkLabel}
                 style={{ color: CHUNK_COLORS[chunkIndex % CHUNK_COLORS.length] }}
               >
-                {chunks[chunkIndex].label}
+                {chunks[chunkIndex]?.label}
               </span>
             )}
             <span className={styles.chunkText}>{text}</span>
