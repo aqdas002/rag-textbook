@@ -9,6 +9,10 @@ prerequisites: [cosine-similarity, chunk-retrieval-impact]
 import { TopKRetriever } from '@sims/TopKRetriever'
 import { MMRRetriever } from '@sims/MMRRetriever'
 import { PredictGate, RecallPrompt } from '@/components'
+import { KvsPrecisionRecall } from '@sims/KvsPrecisionRecall'
+import { LatencyBreakdown } from '@sims/LatencyBreakdown'
+import { HNSWvsIVF } from '@sims/HNSWvsIVF'
+import { LostInTheMiddle } from '@sims/LostInTheMiddle'
 
 ## The top-K primitive
 
@@ -39,6 +43,8 @@ This is the precision-recall tradeoff in its most naked form. **Small K gives yo
 The right K is not 3 or 5 or 10. It depends on your query distribution, your chunk size, and how densely your corpus covers the topic. Measure on real queries.
 
 (Note: this sim uses toy bag-of-words cosine similarity, not real embeddings. Real embeddings would push the Paris/Eiffel/Louvre documents closer together and Tokyo/Python further apart, making the cutoff cleaner — but the shape of the problem is the same.)
+
+<KvsPrecisionRecall />
 
 ## The redundancy problem
 
@@ -182,11 +188,15 @@ A typical production RAG retrieval call, broken down:
 | MMR (if used) | 1–10ms |
 | **End-to-end p50 retrieval** | **50–300ms** |
 
+<HNSWvsIVF />
+
 Anything above ~300ms p50 starts to register as latency in user-facing
 applications. If you're over budget, the levers are: (a) reduce reranker
 top-N, (b) switch to a smaller/self-hosted reranker, (c) reduce dense
 index size with better chunking or filtering, (d) skip reranking on low-stakes
 queries and only pay for it on high-value sessions.
+
+<LatencyBreakdown />
 
 ### The single highest-leverage retrieval trick
 
@@ -231,6 +241,8 @@ chunk in the context window regardless of relevance. This is well-documented
 empirically (the "lost in the middle" finding from Liu et al. 2023). A reranker
 puts the most relevant chunk first; without one, you're hoping your cosine-sim
 ranking happens to match what the LLM will attend to.
+
+<LostInTheMiddle />
 
 The fix for A is to measure on real production query logs or use an LLM to
 generate adversarial queries from the documentation. The fix for B and C is
