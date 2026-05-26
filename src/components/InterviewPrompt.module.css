@@ -1,0 +1,181 @@
+.prompt {
+  background: #f3f4f6;
+  border-left: 4px solid #6366f1;
+  padding: 1rem;
+  border-radius: 4px;
+  margin: 1.5rem 0;
+}
+
+.scenarioLabel {
+  font-size: 0.8em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6366f1;
+  margin: 0 0 0.25rem 0;
+}
+
+.scenarioText {
+  margin: 0 0 0.75rem 0;
+  color: #1f2937;
+  line-height: 1.5;
+}
+
+.architecture {
+  background: #1f2937;
+  color: #d1d5db;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.82em;
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  margin: 0.5rem 0 0.75rem 0;
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.architectureLabel {
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  margin: 0 0 0.25rem 0;
+}
+
+.problemLabel {
+  font-size: 0.8em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6366f1;
+  margin: 0.75rem 0 0.25rem 0;
+}
+
+.question {
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: #111827;
+}
+
+.prompt textarea {
+  width: 100%;
+  font-family: inherit;
+  margin: 0.5rem 0;
+  box-sizing: border-box;
+}
+
+.instruction {
+  font-size: 0.9em;
+  color: #4b5563;
+  font-style: italic;
+}
+
+.gradePanel {
+  background: white;
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin-top: 0.75rem;
+}
+
+.comment {
+  font-size: 0.9em;
+  color: #4b5563;
+  margin-top: 0.25rem;
+}
+
+.committed {
+  color: #047857;
+  font-weight: 600;
+}
+
+/* Solution walkthrough */
+.solutionToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  background: none;
+  border: 1px solid #6366f1;
+  color: #6366f1;
+  font-size: 0.85em;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.solutionToggle:hover {
+  background: #ede9fe;
+}
+
+.solutionPanel {
+  margin-top: 0.75rem;
+  background: #f0fdf4;
+  border-left: 4px solid #16a34a;
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+  color: #14532d;
+}
+
+.solutionPanel h3,
+.solutionPanel h4 {
+  color: #15803d;
+  margin-top: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.solutionPanel h3:first-child,
+.solutionPanel h4:first-child {
+  margin-top: 0;
+}
+
+.solutionPanel p {
+  margin: 0.4rem 0 0.75rem 0;
+  line-height: 1.6;
+}
+
+.solutionPanel ol,
+.solutionPanel ul {
+  padding-left: 1.4rem;
+  margin: 0.4rem 0 0.75rem 0;
+}
+
+.solutionPanel li {
+  margin-bottom: 0.3rem;
+  line-height: 1.6;
+}
+
+.solutionPanel code {
+  background: #dcfce7;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.88em;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.solutionPanel pre {
+  background: #1f2937;
+  color: #d1d5db;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85em;
+  margin: 0.5rem 0;
+}
+
+.solutionPanel pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.solutionLabel {
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #16a34a;
+  margin: 0 0 0.5rem 0;
+}
