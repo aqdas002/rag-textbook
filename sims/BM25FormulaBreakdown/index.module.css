@@ -1,0 +1,167 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.formulaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  font-family: monospace;
+  font-size: 0.88em;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.75rem;
+  line-height: 2;
+}
+
+.part {
+  display: inline-block;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-weight: 600;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.partIDF   { background: #ede9fe; color: #6d28d9; }
+.partTF    { background: #dbeafe; color: #1e40af; }
+.partLen   { background: #ffedd5; color: #c2410c; }
+.partK1    { background: #f3f4f6; color: #374151; }
+.partB     { background: #f3f4f6; color: #374151; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8em;
+  color: #374151;
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.radioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.radioLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85em;
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: white;
+}
+
+.radioLabel:has(input:checked) {
+  background: #eff6ff;
+  border-color: #3b82f6;
+}
+
+.breakdown {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.75rem;
+}
+
+.breakdownTitle {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 0.5rem;
+}
+
+.termRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.82em;
+}
+
+.termToken {
+  font-family: monospace;
+  background: #e5e7eb;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-weight: 600;
+}
+
+.idfBar {
+  display: inline-block;
+  height: 10px;
+  border-radius: 2px;
+  background: #6d28d9;
+  vertical-align: middle;
+  min-width: 2px;
+}
+
+.idfValue {
+  font-family: monospace;
+  font-size: 0.9em;
+  color: #6d28d9;
+  font-weight: 600;
+}
+
+.docList {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e5e7eb;
+  font-size: 0.8em;
+  color: #6b7280;
+}
+
+.docListTitle {
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.25rem;
+}
+
+.docItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.docScore {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #059669;
+  font-weight: 700;
+}
+
+.caption {
+  font-size: 0.82em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.75rem;
+  font-style: italic;
+}

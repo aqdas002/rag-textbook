@@ -1,0 +1,147 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.sampleText {
+  text-align: center;
+  font-style: italic;
+  font-size: 0.88em;
+  color: #374151;
+  margin-bottom: 0.75rem;
+  padding: 0.4rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 540px) {
+  .columns { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.65rem;
+}
+
+.panelTitle {
+  margin: 0 0 0.4rem;
+  font-size: 0.82em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #374151;
+}
+
+.panelLabel {
+  font-size: 0.78em;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+/* Sparse vector — horizontal slots */
+.sparseVector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 0.5rem;
+}
+
+.sparseSlot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.sparseBar {
+  width: 18px;
+  border-radius: 2px 2px 0 0;
+}
+
+.sparseToken {
+  font-size: 0.55em;
+  color: #9ca3af;
+  font-family: monospace;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  height: 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sparseTokenActive {
+  color: #7c3aed;
+  font-weight: 700;
+}
+
+/* Dense vector — colour-coded cells */
+.denseVector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 0.5rem;
+}
+
+.denseCell {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.52em;
+  font-family: monospace;
+  color: white;
+  font-weight: 600;
+}
+
+/* Comparison table */
+.compTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8em;
+}
+
+.compTable th {
+  background: #f3f4f6;
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+}
+
+.compTable td {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+  vertical-align: top;
+}
+
+.compTable tr:nth-child(even) td {
+  background: #f9fafb;
+}
+
+.caption {
+  font-size: 0.82em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.75rem;
+  font-style: italic;
+}
