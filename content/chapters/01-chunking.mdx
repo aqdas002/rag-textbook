@@ -14,6 +14,10 @@ import { VendorDefaultsChart } from '@sims/VendorDefaultsChart'
 import { SplitterLevels } from '@sims/SplitterLevels'
 import { HeaderPrependingDemo } from '@sims/HeaderPrependingDemo'
 import { ChunkSizeSweetSpot } from '@sims/ChunkSizeSweetSpot'
+import { TokenizationViz } from '@sims/TokenizationViz'
+import { DocumentTypeChunker } from '@sims/DocumentTypeChunker'
+import { HeaderlessChunkFailure } from '@sims/HeaderlessChunkFailure'
+import { ChunkingPipelineFlow } from '@sims/ChunkingPipelineFlow'
 
 ## Why chunks?
 
@@ -125,11 +129,10 @@ model-specific tokenizer — not by characters. The sims above use characters
 because they're easier to visualize. The principle is identical; the units
 differ.
 
-Conversion rules of thumb for English: 1 token ≈ 4 characters ≈ 0.75 words.
-So a 500-token chunk is roughly 2000 characters or ~375 words. Non-English
-text and code tokenize differently — Chinese is closer to 1 token per
-character; Python is roughly 1 token per 3 characters because of all the
-indentation and short names.
+<TokenizationViz />
+
+The chars/token ratio varies sharply by language: English ~3.5, Python ~2.8, Chinese ~1.
+A `chunk_size = 500` tokens means very different text volumes depending on what you're indexing — so always reason in tokens, and measure the character conversion for your corpus.
 
 ### The five levels of text splitting
 
@@ -151,25 +154,17 @@ mostly demos.
 
 ### Document-type-specific gotchas
 
-Naive chunking destroys structured documents. The specific failures you'll
-hit in production:
+Naive fixed-size chunking destroys structured documents differently for each type. The figure shows exactly what breaks:
 
-- **Code**: split by function or class boundary using `tree-sitter` or a
-  language-specific parser. Splitting Python by characters destroys
-  indentation and the resulting chunks don't even parse.
-- **Markdown**: split at headers, then prepend the header chain
-  (`## Setup → ### Database → [chunk text]`) to each chunk so retrieval
-  can find context-less subsections.
-- **PDFs**: the text-extraction layer is usually worse than your chunking.
-  `pypdf` strips tables, columns, and headers; tools like Unstructured.io
-  and LlamaParse preserve layout. Spend the effort on extraction quality
-  before tuning chunk size.
-- **Tables**: never mid-row chunk. Either keep the table intact (if it
-  fits) or extract it separately and store it as JSON/HTML in chunk
-  metadata.
-- **HTML**: parse with `BeautifulSoup`, drop `<nav>` / `<footer>` /
-  `<script>`, then chunk the remaining text. Otherwise every chunk
-  contains 200 tokens of navigation menu noise.
+<DocumentTypeChunker />
+
+The remedies follow directly from the failure modes:
+
+- **Code**: split at function or class boundaries using `tree-sitter` or a language-specific parser — character splitting destroys indentation and produces unparseable chunks.
+- **Markdown**: split at headers, then prepend the full header chain (`## Setup → ### Database → [chunk text]`) to every chunk.
+- **PDFs**: the extraction layer is usually the bigger problem. `pypdf` strips tables and columns; Unstructured.io and LlamaParse preserve layout. Fix extraction before tuning chunk size.
+- **Tables**: never chunk mid-row. Keep the table intact or store rows as JSON in chunk metadata.
+- **HTML**: parse with `BeautifulSoup`, drop `<nav>` / `<footer>` / `<script>`, then chunk the remaining text.
 
 ### The single highest-leverage chunking trick
 
@@ -191,42 +186,15 @@ token overhead per chunk and is two lines of code. Cite this in interviews.
 > "The chunk has the right keywords. The retriever found it. The LLM still
 > says it doesn't know."
 
-This happens because the chunk is a fragment lifted from a bullet list,
-table cell, or numbered step where the headers and surrounding context lived
-above the chunk boundary and got stripped. The chunk reads:
+<HeaderlessChunkFailure />
 
-```
-• 30 days from the date of purchase
-• must include original packaging
-• refunds processed within 5 business days
-```
-
-The query was "what is the return window?" The retriever happily returns
-this chunk — the embedding is close enough. But the LLM has no idea what
-"30 days from the date of purchase" refers to. The header *"Returns Policy"*
-lived above the bullet list and got stripped at chunking.
-
-The header-prepending trick above fixes this. So does using
-`RecursiveCharacterTextSplitter` with `MarkdownHeaderTextSplitter` chained
-in front. The fact that this is the most common production RAG failure and
-the fix is "prepend the header" is one of those things you should walk into
-an interview already knowing.
+This happens because the chunk was lifted from a bullet list or numbered step whose headers lived above the chunk boundary and got stripped at chunking time. The retriever finds the chunk — embedding similarity is fine — but the LLM receives context with no subject. Prepending the header chain is a two-line fix that eliminates this failure mode.
 
 ### Where chunking fits in the bigger system
 
-In a production RAG pipeline, chunking is one step in:
+<ChunkingPipelineFlow />
 
-```
-[Source docs] → [Extract text] → [Clean/normalize] → [Chunk] →
-  [Embed] → [Index] → ... query path ...
-```
-
-It is the step that determines what units retrieval can return. Every
-choice you make here propagates downstream: too small and retrieval can't
-return enough context to answer; too large and the LLM context fills up
-with irrelevant text. Tuning chunk size in isolation rarely wins;
-**measuring end-to-end retrieval quality on real queries** is the only
-honest evaluation.
+Chunking is the step that determines what units retrieval can return. Click any stage to see what tooling lives there and which chapter covers it. Every choice made here propagates downstream: too small and retrieval can't return enough context; too large and the LLM context window fills with irrelevant text. **Measuring end-to-end retrieval quality on real queries** is the only honest evaluation — tuning chunk size in isolation rarely wins.
 
 The next chapter — Embeddings — picks up where this one ends: once you
 have chunks, what does it mean to compare them to a query?
