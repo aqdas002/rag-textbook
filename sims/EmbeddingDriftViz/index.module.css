@@ -1,0 +1,215 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.header {
+  margin-bottom: 0.75rem;
+}
+
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.subtitle {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.scatterRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 0.75rem;
+}
+
+.vsLabel {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #dc2626;
+  padding: 0 0.25rem;
+}
+
+.scatterWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.scatterTitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.25rem;
+  text-align: center;
+}
+
+.scatterSvg {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fafafa;
+  display: block;
+}
+
+.caption {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+
+.mixPanel {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.mixTitle {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #dc2626;
+  margin-bottom: 0.5rem;
+}
+
+.mixScatters {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.mixScatterBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.mixLabel {
+  font-size: 0.72rem;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+  text-align: center;
+}
+
+.mixArrow {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.mixResult {
+  padding: 0.5rem 0.75rem;
+  background: white;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  min-width: 140px;
+}
+
+.mixResultTitle {
+  font-size: 0.72rem;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+}
+
+.mixResultWord {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 0.15rem;
+}
+
+.mixResultScore {
+  font-size: 0.72rem;
+  font-family: monospace;
+  color: #6b7280;
+}
+
+.mixNote {
+  font-size: 0.72rem;
+  color: #9ca3af;
+  margin-bottom: 0.4rem;
+}
+
+.verdict {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.25rem 0.4rem;
+  border-radius: 3px;
+}
+
+.verdict[data-verdict="bad"] {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+}
+
+.migrationRow {
+  margin-top: 0.5rem;
+}
+
+.migrationToggle {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.migrationToggle:hover {
+  background: #f3f4f6;
+}
+
+.migrationToggleActive {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.migrationList {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.migrationOption {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.6rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+}
+
+.migrationOptionLabel {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1e40af;
+  margin-bottom: 0.15rem;
+}
+
+.migrationOptionDesc {
+  font-size: 0.77rem;
+  color: #374151;
+  line-height: 1.45;
+}

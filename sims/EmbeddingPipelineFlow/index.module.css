@@ -1,0 +1,174 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.sectionLabel {
+  font-size: 0.72em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #9ca3af;
+  margin-bottom: 0.5rem;
+}
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 0.6rem;
+}
+
+.stageRow {
+  display: flex;
+  align-items: center;
+}
+
+.stageBox {
+  padding: 0.4rem 0.7rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82em;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s;
+  font-weight: 500;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  white-space: nowrap;
+}
+
+.stageBox:hover {
+  background: #f3f4f6;
+}
+
+.stageHighlight {
+  background: #fefce8;
+  border-width: 2px;
+  font-weight: 700;
+}
+
+.stageActive {
+  background: #ede9fe;
+}
+
+.focusBadge {
+  display: block;
+  font-size: 0.65em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #d97706;
+  background: #fef3c7;
+  border-radius: 2px;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+
+.queryBox {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.78em;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  transition: background 0.15s, border-color 0.15s;
+  color: #374151;
+}
+
+.queryBox:hover {
+  background: #f3f4f6;
+}
+
+.queryHighlight {
+  background: #fefce8;
+  border-width: 2px;
+  font-weight: 700;
+}
+
+.queryActive {
+  background: #ede9fe;
+}
+
+.focusBadgeQuery {
+  display: block;
+  font-size: 0.65em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #d97706;
+  background: #fef3c7;
+  border-radius: 2px;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+
+.arrow {
+  padding: 0 0.25rem;
+  color: #9ca3af;
+  font-size: 0.9em;
+  flex-shrink: 0;
+}
+
+.detailPanel {
+  min-height: 2.5rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  transition: border-color 0.15s;
+}
+
+.detailVisible {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.detailStageLabel {
+  font-size: 0.75em;
+  font-weight: 700;
+  color: #d97706;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.detailText {
+  font-size: 0.82em;
+  color: #1f2937;
+  line-height: 1.5;
+}
+
+.detailHint {
+  font-size: 0.82em;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.keyNote {
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin: 0.75rem 0 0;
+  line-height: 1.5;
+  padding: 0.4rem 0.6rem;
+  background: #fef9c3;
+  border-left: 3px solid #d97706;
+  border-radius: 0 4px 4px 0;
+}
