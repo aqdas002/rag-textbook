@@ -7,6 +7,10 @@ prerequisites: [top-k-retrieval, cosine-similarity]
 ---
 
 import { BM25vsDenseComparison } from '@sims/BM25vsDenseComparison'
+import { BM25FormulaBreakdown } from '@sims/BM25FormulaBreakdown'
+import { RRFMechanism } from '@sims/RRFMechanism'
+import { SparseDenseRepresentation } from '@sims/SparseDenseRepresentation'
+import { QueryTypeMatrix } from '@sims/QueryTypeMatrix'
 import { PredictGate, RecallPrompt } from '@/components'
 
 ## The other retrieval (BM25)
@@ -35,7 +39,11 @@ BM25(d, q) = Σ IDF(qi) · [tf(qi,d) · (k1+1)] / [tf(qi,d) + k1·(1 - b + b·|d
 
 That's the whole thing. The parameters matter and are discussed in In Practice, but the conceptual payload is simpler: BM25 rewards documents that contain the query's rare terms and penalizes very long documents that contain every term incidentally. Don't get lost in the formula — understand the two intuitions.
 
+<BM25FormulaBreakdown />
+
 ## Different failure modes
+
+<QueryTypeMatrix />
 
 Dense retrieval and BM25 fail in opposite directions. That asymmetry is the entire reason you'd want both.
 
@@ -89,6 +97,8 @@ RRF(B) = 1/(60+1) + 1/(60+4) = 0.01639 + 0.01563 = 0.03202
 ```
 
 Document A edges out document B because its top-1 dense rank is worth slightly more than document B's top-1 BM25 rank. In practice, with k=60, the rank values are smoothed — the difference between rank 1 and rank 3 is modest, and the difference between rank 3 and rank 20 is also modest. This smoothing is deliberate: it means a document that ranks solidly in the top 10 for both lists beats one that ranks #1 in one list and #50 in the other. Consistent moderate relevance across both signals beats extreme relevance in one.
+
+<RRFMechanism />
 
 **Why k=60.** The constant k smoothly controls how steeply ranks are discounted. Smaller k makes the formula more aggressive — rank 1 is worth dramatically more than rank 2. Larger k flattens the curve — all top-20 docs receive nearly equal weight. k=60 was the value Cormack, Clarke, and Buettcher found worked well across the TREC retrieval collections when combining multiple runs. It is rarely worth tuning; the improvement from k=40 versus k=60 versus k=80 is minimal on most corpora.
 
@@ -178,6 +188,8 @@ You will see both terms in the literature. They refer to the same idea at differ
 **Sparse-dense hybrid** is the more general category. In addition to traditional BM25, you can use *learned sparse representations* — SPLADE (Formal et al., 2021) and BGE-M3's sparse output head being the most common. These models produce sparse vectors where each dimension corresponds to a vocabulary token and the value represents its learned importance for the document. The sparse vector captures both exact-match signal and some semantic signal that a pure BM25 score would miss.
 
 In practice: start with BM25 because it requires no additional model, runs in Elasticsearch or OpenSearch you already have, and gets you most of the benefit. If you find that BM25 is failing on domain-specific vocabulary (technical jargon, abbreviations, compound terms) that a learned sparse model might handle better, evaluate SPLADE. The merge mechanism is the same — RRF or weighted combination — regardless of which sparse component you use.
+
+<SparseDenseRepresentation />
 
 ### The single highest-leverage hybrid trick
 
