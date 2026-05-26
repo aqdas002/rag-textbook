@@ -1,6 +1,7 @@
 // src/components/PredictGate.tsx
 import { useState, ReactNode, cloneElement, isValidElement } from 'react';
 import styles from './PredictGate.module.css';
+import { usePreferences } from '../lib/preferences';
 
 interface Props {
   concept: string;
@@ -10,6 +11,25 @@ interface Props {
 }
 
 export function PredictGate({ concept, question, hint, children }: Props) {
+  const { predictFirst } = usePreferences();
+
+  if (!predictFirst) {
+    // Pass-through: render children with data-locked='false'
+    const passThroughChildren = isValidElement(children)
+      ? cloneElement(children as React.ReactElement, { 'data-locked': 'false' })
+      : children;
+    return (
+      <div className={styles.gate} data-concept={concept}>
+        {passThroughChildren}
+      </div>
+    );
+  }
+
+  // Existing predict-first behavior below
+  return <PredictGateActive concept={concept} question={question} hint={hint}>{children}</PredictGateActive>;
+}
+
+function PredictGateActive({ concept, question, hint, children }: Props) {
   const [prediction, setPrediction] = useState('');
   const [submitted, setSubmitted] = useState(false);
 

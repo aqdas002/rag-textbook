@@ -1,8 +1,16 @@
 // src/components/PredictGate.test.tsx
-import { describe, test, expect, vi } from 'vitest';
+import { describe, test, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PredictGate } from './PredictGate';
+import { setPreference, _resetForTests } from '../lib/preferences';
+
+beforeEach(() => {
+  localStorage.clear();
+  _resetForTests();
+  // Enable predict-first so gate behavior is exercised
+  setPreference('predictFirst', true);
+});
 
 describe('PredictGate', () => {
   test('hides children behind overlay until prediction submitted', async () => {

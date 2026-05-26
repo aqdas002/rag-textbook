@@ -1,9 +1,15 @@
 import { jsx as _jsx } from "react/jsx-runtime";
 // src/components/PredictGate.test.tsx
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PredictGate } from './PredictGate';
+import { setPreference, _resetForTests } from '../lib/preferences';
+beforeEach(() => {
+    localStorage.clear();
+    _resetForTests();
+    setPreference('predictFirst', true);
+});
 describe('PredictGate', () => {
     test('hides children behind overlay until prediction submitted', async () => {
         render(_jsx(PredictGate, { concept: "c1", question: "What will happen?", children: _jsx("div", { "data-testid": "sim", children: "SIM" }) }));
