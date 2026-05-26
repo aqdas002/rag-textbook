@@ -10,6 +10,10 @@ import { ChunkBoundaryExplorer } from '@sims/ChunkBoundaryExplorer'
 import { OverlapVisualizer } from '@sims/OverlapVisualizer'
 import { ChunkRetrievalImpact } from '@sims/ChunkRetrievalImpact'
 import { PredictGate, RecallPrompt } from '@/components'
+import { VendorDefaultsChart } from '@sims/VendorDefaultsChart'
+import { SplitterLevels } from '@sims/SplitterLevels'
+import { HeaderPrependingDemo } from '@sims/HeaderPrependingDemo'
+import { ChunkSizeSweetSpot } from '@sims/ChunkSizeSweetSpot'
 
 ## Why chunks?
 
@@ -83,6 +87,8 @@ principle — they make the same kind of mistake, just less obviously.)
 | Sweet spot (~200–500 chars or ~100–300 tokens) | Useful balance | Always context-dependent — measure for your corpus |
 | Too large (≥ 2000 chars) | Each chunk has full context | Score dilution; irrelevant facts in a "relevant" chunk; misses fine details |
 
+<ChunkSizeSweetSpot />
+
 There is no universal best chunk size. There is a best chunk size *for your
 corpus and your query distribution* — and the way to find it is to evaluate
 on real queries, not to guess.
@@ -104,6 +110,8 @@ from systems people actually run:
   tokens for their evaluation corpus, with the addition of LLM-generated
   contextual prefixes added to each chunk (more on this below).
 - **OpenAI cookbook examples**: typically 500–800 tokens.
+
+<VendorDefaultsChart />
 
 The spread is itself a signal: "best" chunk size is a corpus-specific
 hyperparameter, not a universal constant. The right move is to pick
@@ -134,6 +142,8 @@ Greg Kamradt (LangChain) popularized this taxonomy of splitter sophistication:
 | 3 | Document-specific (Markdown by headers, code by AST) | When document structure carries meaning — most production RAG |
 | 4 | Semantic (embed sentences, group by similarity) | When recursive splitting butchers your specific corpus |
 | 5 | Agentic (LLM proposes splits) | Research / very-high-stakes corpora — too expensive for routine use |
+
+<SplitterLevels />
 
 Most production systems live at level 2 or 3. Level 4 sounds principled but
 rarely wins enough to justify the latency and cost at index time. Level 5 is
@@ -173,6 +183,8 @@ across corpora.
 You don't need an LLM call for the basic version. Even just static header
 prepending recovers most of what fixed-size chunking loses. It costs a small
 token overhead per chunk and is two lines of code. Cite this in interviews.
+
+<HeaderPrependingDemo />
 
 ### The failure mode you will see in production
 
