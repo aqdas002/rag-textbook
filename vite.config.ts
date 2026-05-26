@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import mdx from '@mdx-js/rollup';
 import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
 import path from 'node:path';
 
 // On GitHub Pages we live at https://<user>.github.io/<repo>/. The base path
@@ -12,7 +13,9 @@ const base = process.env.VITE_BASE_PATH ?? '/';
 export default defineConfig({
   base,
   plugins: [
-    { enforce: 'pre', ...mdx({ remarkPlugins: [remarkFrontmatter] }) },
+    // remark-gfm adds GitHub-Flavored Markdown: tables, strikethrough, task lists,
+    // autolinks. Without it, every `| col | col |` line renders as raw text.
+    { enforce: 'pre', ...mdx({ remarkPlugins: [remarkFrontmatter, remarkGfm] }) },
     react(),
   ],
   resolve: {

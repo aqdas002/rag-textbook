@@ -8,3 +8,49 @@
 .main h1 { font-size: 2rem; margin-bottom: 1.5rem; }
 .main h2 { margin-top: 2.5rem; }
 .main code { background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; }
+
+/* MDX tables via remark-gfm */
+.main table {
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  width: 100%;
+  font-size: 0.95em;
+}
+.main th, .main td {
+  border: 1px solid #e5e7eb;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+.main th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+}
+.main tr:nth-child(even) td { background: #fafafa; }
+.main td code { font-size: 0.95em; }
+
+/* Tighten common MDX prose */
+.main pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.9rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  line-height: 1.55;
+  margin: 1rem 0;
+}
+.main pre code { background: transparent; padding: 0; color: inherit; }
+.main blockquote {
+  border-left: 4px solid #cbd5e1;
+  background: #f8fafc;
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  color: #475569;
+  font-style: italic;
+}
+.main ul, .main ol { padding-left: 1.5rem; }
+.main li { margin: 0.25rem 0; }
+.main a { color: #2563eb; }
+.main hr { border: none; border-top: 1px solid #e5e7eb; margin: 2rem 0; }
