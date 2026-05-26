@@ -9,6 +9,10 @@ prerequisites: [chunk-size]
 import { EmbeddingSpace } from '@sims/EmbeddingSpace'
 import { SimilarityScorer } from '@sims/SimilarityScorer'
 import { PredictGate, RecallPrompt } from '@/components'
+import { EmbeddingModelComparison } from '@sims/EmbeddingModelComparison'
+import { DimensionTradeoffChart } from '@sims/DimensionTradeoffChart'
+import { EncoderPipeline } from '@sims/EncoderPipeline'
+import { AsymmetricPrefix } from '@sims/AsymmetricPrefix'
 
 ## What is an embedding?
 
@@ -19,6 +23,8 @@ This is the core mechanism behind semantic retrieval. Instead of asking "does th
 The model that produces embeddings is called an **encoder**. It's a separate model from the generator (the LLM that produces answers). You run the encoder once at index time for every chunk, store the resulting vectors in a vector database, and then run it again at query time to embed the incoming question. Retrieval is the geometry problem that follows.
 
 One detail worth fixing early: an embedding is not a "summary" and it is not human-readable. It is a coordinate in a high-dimensional space. What makes it useful is not any single dimension — it's the position *relative to other vectors* that carries meaning.
+
+<EncoderPipeline />
 
 ## The space
 
@@ -115,6 +121,8 @@ rank as your answer. MTEB aggregates over many tasks and domains. A model that
 ranks third overall may outrank first place on your specific corpus. Always run a
 small retrieval eval on 50–100 of your real queries before committing to a model.
 
+<EmbeddingModelComparison />
+
 ### Dimensions matter and they don't
 
 More dimensions means larger vectors: more storage, slower ANN search, higher
@@ -134,6 +142,8 @@ In practice, production systems often run **512–768 dimensions** as the cost-q
 sweet spot. If you're using a Matryoshka model, start at 512 and benchmark before
 paying for more dimensions. If you're on a fixed model without MRL, 1024–1536 is
 the practical ceiling worth paying for.
+
+<DimensionTradeoffChart />
 
 ### Embedding drift
 
@@ -188,6 +198,8 @@ OpenAI and Cohere models do not require this — their asymmetry is baked into t
 training objective without user-visible prefixes. Check the model card before you
 trust a benchmark. If you're seeing unexpectedly poor performance from an open-source
 model, missing prefixes are the first thing to check.
+
+<AsymmetricPrefix />
 
 ### The single highest-leverage embedding trick
 
