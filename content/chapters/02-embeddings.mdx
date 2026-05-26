@@ -8,11 +8,14 @@ prerequisites: [chunk-size]
 
 import { EmbeddingSpace } from '@sims/EmbeddingSpace'
 import { SimilarityScorer } from '@sims/SimilarityScorer'
-import { PredictGate, RecallPrompt } from '@/components'
+import { PredictGate, RecallPrompt, InterviewPrompt } from '@/components'
 import { EmbeddingModelComparison } from '@sims/EmbeddingModelComparison'
 import { DimensionTradeoffChart } from '@sims/DimensionTradeoffChart'
 import { EncoderPipeline } from '@sims/EncoderPipeline'
 import { AsymmetricPrefix } from '@sims/AsymmetricPrefix'
+import { EmbeddingDriftViz } from '@sims/EmbeddingDriftViz'
+import { OutOfDistributionFailure } from '@sims/OutOfDistributionFailure'
+import { EmbeddingPipelineFlow } from '@sims/EmbeddingPipelineFlow'
 
 ## What is an embedding?
 
@@ -147,24 +150,11 @@ the practical ceiling worth paying for.
 
 ### Embedding drift
 
-Embedding models get updated and deprecated. When OpenAI retired
-`text-embedding-ada-002` and introduced `text-embedding-3-small`, teams that
-migrated had an immediate operational problem: the two models produce vectors in
-*different geometric spaces*. A query embedded with `3-small` has no meaningful
-relationship to a chunk vector produced by `ada-002`. You cannot mix them.
+When a vendor updates their encoder, old and new vectors live in incompatible geometric spaces — a query from the new model finds nonsense in the old index.
 
-The correct migration plan is one of two things: (a) **re-embed everything** with
-the new model before switching query embedding, which means a one-time cost of
-re-indexing your entire corpus, or (b) **run two indexes in parallel** — queries go
-to both, results are merged — until the old index is drained. Option (b) is more
-complex but avoids a write-freeze on your corpus during re-indexing.
+<EmbeddingDriftViz />
 
-The operational lesson: **log the model name with every embedding at write time**.
-Store it as metadata on each vector in your database. This lets you detect
-drift — if your query encoder and chunk encoder model names don't match at retrieval
-time, that is a bug, and you want to catch it before it silently destroys your
-retrieval quality. This is a common interview question; the correct answer is
-"re-embed everything" not "oh, it'll probably be fine."
+The correct migration is to either re-embed everything before switching the query encoder, or run parallel indexes during the transition. The key operational discipline: **log the model name with every embedding at write time** so you can detect model mismatches before they silently destroy retrieval quality.
 
 ### Same encoder for queries AND chunks
 
@@ -226,59 +216,21 @@ headers beat raw chunks almost universally.
 
 ### The failure mode you will see in production
 
-> "Retrieval was great on the test set. After launch, every question that uses a
-> product name, internal abbreviation, or team-specific jargon comes back empty."
+> "Retrieval was great on the test set. After launch, every question that uses a product name, internal abbreviation, or team-specific jargon comes back empty."
 
-Here's what happened. Your test queries were written by the same people who wrote
-the documentation — they used the same vocabulary. Real users call the same thing by
-four different names: "SSO", "single sign-on", "SAML login", "the work login thing".
-The documentation says "SSO configuration". The embeddings for "how do I set up the
-work login thing" and "SSO configuration" may be close enough in a general-domain
-model — or they may not be, because "work login thing" is out-of-distribution
-relative to the encoder's training data.
+Root cause: **cosine similarity is anchored in training distribution**. Out-of-domain terminology lowers similarity scores even when the semantic intent is identical.
 
-Root cause: **cosine similarity is anchored in training distribution**. Out-of-domain
-terminology lowers similarity scores even when the semantic intent is identical. The
-encoder has never seen your internal product names in context.
+<OutOfDistributionFailure />
 
-Mitigations, in order of effort:
-
-1. **Query rewriting** (covered in a later chapter): use an LLM to normalize user
-   queries to canonical terminology before embedding. Low effort, high return.
-2. **Synonym expansion**: augment the query with known aliases before embedding, or
-   store aliases in chunk metadata and run a hybrid search.
-3. **Fine-tune the encoder**: if you have 1K+ labeled query/chunk pairs, fine-tuning
-   on your domain vocabulary with a contrastive objective (e.g. using the `sentence-transformers`
-   library) can close the distribution gap. More effort, durable gains.
-
-The eval to catch this before launch: include queries written by users (or proxies
-for users) in your offline eval set, not just queries written by the documentation
-authors. A retrieval@5 of 92% on author-written queries can coexist with 40% on
-user-written queries for the same corpus.
+The eval to catch this before launch: include queries written by users (or proxies for users) in your offline eval set, not just queries written by the documentation authors. A retrieval@5 of 92% on author-written queries can coexist with 40% on user-written queries for the same corpus.
 
 ### Where embeddings fit in the bigger system
 
-Embeddings are the bridge between two sides of the pipeline:
+The encoder bridges two sides of the pipeline — indexing chunks at write time, then embedding the query at request time through the same model.
 
-```
-[Index time]
-[Chunks] → [Encoder] → [Vector index]
+<EmbeddingPipelineFlow />
 
-[Query time]
-[User query] → [Encoder] → [ANN search against index] → [Top-K chunks] → [LLM]
-```
-
-The encoder is called **twice per request** in the query path (once at index time per
-chunk, then once per query). The index-time call is batch and offline; the query-time
-call is on the critical path. A model that takes 200ms to embed a query adds 200ms
-to every response. For open-source models served locally, this latency budget matters;
-hosted API models are typically 20–50ms and rarely a bottleneck.
-
-The choice of encoder model determines the geometry of the space the ANN search
-operates in. Everything downstream — what "nearest" means, which chunks surface —
-follows from that geometry. This is why encoder choice is a load-bearing architectural
-decision: you can change chunk size post-launch with a re-index, but changing encoder
-model requires re-embedding the entire corpus. Pick deliberately.
+The choice of encoder model determines the geometry of the space the ANN search operates in. Everything downstream — what "nearest" means, which chunks surface — follows from that geometry. This is why encoder choice is a load-bearing architectural decision: you can change chunk size post-launch with a re-index, but changing encoder model requires re-embedding the entire corpus. Pick deliberately.
 
 ## Recall — interview style
 
@@ -289,27 +241,215 @@ is no single right answer to most — what's graded is whether you identify
 the right tradeoffs, propose specific (not generic) actions, and flag
 failure modes.
 
-<RecallPrompt
+<InterviewPrompt
   concept="embedding"
-  question="**Production debug.** Your team migrated from `text-embedding-ada-002` to `text-embedding-3-small` last week. Since the migration, retrieval quality has collapsed — precision@5 dropped from 87% to 31% on your offline eval set. The code review shows the new model is being called correctly. Walk through your diagnosis and recovery plan. What is the most likely root cause, and what are the exact operational steps to fix it without a write-freeze on the corpus?"
-/>
+  scenario="**Production debug.** Your team migrated from `text-embedding-ada-002` to `text-embedding-3-small` last week. Since the migration, retrieval quality has collapsed — precision@5 dropped from 87% to 31% on your offline eval set. The code review shows the new model is being called correctly."
+  question="Walk through your diagnosis and recovery plan. What is the most likely root cause, and what are the exact operational steps to fix it without a write-freeze on the corpus?"
+  architecture={`Before migration:
+  Chunk index: ada-002 vectors (1536-dim)
+  Query encoder: ada-002
 
-<RecallPrompt
+After migration (broken state):
+  Chunk index: STILL ada-002 vectors (not re-embedded)
+  Query encoder: text-embedding-3-small
+
+Result: query vectors and chunk vectors live in different geometric spaces`}
+>
+
+### Root cause: vectors from two incompatible spaces
+
+The most likely root cause is a partial migration — the query encoder was switched to `text-embedding-3-small`, but the chunk vectors in the index were never re-embedded. The `EmbeddingDriftViz` in this chapter makes this visible: the same words cluster in completely different positions under `ada-002` vs `text-embedding-3-small`. The cosine similarity between a `3-small` query vector and an `ada-002` chunk vector is geometrically meaningless — it's measuring the angle between two points that live in different coordinate systems.
+
+The symptom fits perfectly. Precision@5 = 87% with the old model (both query and chunks in the same space) collapsing to 31% after migration (query in new space, chunks in old space) is the canonical embedding drift signature. Results don't go to zero because some dimensions happen to overlap by chance, but they're effectively random.
+
+### Confirming the diagnosis
+
+1. **Check stored model metadata.** If you've been logging the model name with every vector (as described in this chapter's "Embedding drift" sub-section), query your vector DB for a sample of chunk vectors and check their `encoder_model` metadata field. If it shows `text-embedding-ada-002` while your query config now uses `text-embedding-3-small`, you have your answer in 30 seconds.
+
+2. **Spot-check embedding similarity.** Take a query you know should retrieve a specific chunk. Embed the query with `3-small`. Pull the chunk's stored vector. Compute cosine similarity directly. A score near zero (or negative) confirms cross-space contamination.
+
+3. **Verify the query config.** Confirm which model is currently being called for query embedding. A common bug: the migration updated the indexing config but left the query config pointing at the old model, or vice versa.
+
+### Recovery plan (no write-freeze)
+
+**Option 1 — Re-embed in parallel (recommended):** Stand up a background job that re-embeds all chunks with `text-embedding-3-small` and writes them to a new index namespace. Keep serving queries from the old namespace (with the old encoder) while the background job runs. Once re-indexing is complete, flip the query encoder and the namespace in a single atomic config change. Zero downtime, clean cutover. Cost: one-time re-embedding of the full corpus.
+
+**Option 2 — Run dual indexes:** Route every query to both the old index (with old encoder) and the new index (with new encoder). Merge results by rank. This gets you partial quality improvement immediately while the new index fills up, but adds latency and complexity. Worth it only if you can't afford the downtime of Option 1's cutover moment.
+
+**Option 3 — Roll back immediately:** Switch the query encoder back to `ada-002` to restore the 87% precision while you plan the proper migration. This is the fastest recovery if the business impact of 31% precision is acute.
+
+### Why this is the canonical answer
+
+This is the exact failure mode the `EmbeddingDriftViz` in this chapter illustrates: two models produce different vector space geometries, and mixing them produces nonsense retrieval. The "Embedding drift" sub-section explicitly calls out the migration options — re-embed everything, or run parallel indexes. The logging discipline (store model name with every vector) is the diagnostic lever that lets you confirm this bug in 30 seconds vs. days of guessing. In interviews, naming the root cause (partial migration, cross-space contamination) and one concrete recovery path that avoids a write-freeze is the senior-level answer.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="vector-space"
-  question="**Design choice.** Your team is debating embedding dimensions for a new RAG system: one engineer wants 256-dim Matryoshka-truncated vectors for cost, another wants 1536-dim OpenAI embeddings for quality, a third proposes 768-dim BGE open-source. You have 50M chunks, a $500/month vector storage budget, and a p95 query latency target of 150ms. Quantify the storage and latency tradeoffs for each option and make a recommendation with explicit conditions under which you'd change it."
-/>
+  scenario="**Design choice.** Your team is debating embedding dimensions for a new RAG system: one engineer wants 256-dim Matryoshka-truncated vectors for cost, another wants 1536-dim OpenAI embeddings for quality, a third proposes 768-dim BGE open-source. You have 50M chunks, a $500/month vector storage budget, and a p95 query latency target of 150ms."
+  question="Quantify the storage and latency tradeoffs for each option and make a recommendation with explicit conditions under which you'd change it."
+  architecture={`50M chunks × float32 storage per vector:
 
-<RecallPrompt
+  256-dim:  50M × 256 × 4B = ~51 GB
+  768-dim:  50M × 768 × 4B = ~154 GB
+  1536-dim: 50M × 1536 × 4B = ~307 GB
+
+  At $0.05/GB-month managed vector storage:
+  256-dim:  ~$2.6/month
+  768-dim:  ~$7.7/month
+  1536-dim: ~$15.4/month`}
+>
+
+### Storage math
+
+At float32 (4 bytes per dimension), the three options with 50M chunks:
+
+- **256-dim:** ~51 GB → ~$2.6/month at $0.05/GB. Well within the $500 budget, leaves headroom for metadata and HNSW graph overhead (typically 1.5–2× the raw vector size).
+- **768-dim:** ~154 GB → ~$7.7/month. Still well within budget. This is the sweet spot the `DimensionTradeoffChart` in this chapter illustrates — quality rises steeply to ~768 dims and then plateaus.
+- **1536-dim:** ~307 GB → ~$15.4/month. Well within the $500 budget too, but the quality gain over 768-dim is marginal for most RAG workloads. The HNSW index grows roughly proportionally, adding latency.
+
+All three options fit the storage budget comfortably. Storage is not the deciding constraint at this scale.
+
+### Latency math
+
+ANN search latency scales with dimensionality (dot product computation per candidate) and index size. At 50M vectors:
+
+- **256-dim:** Fastest. p95 latency on a well-provisioned HNSW index: ~30–50ms for the ANN step. Leaves ~100ms for embedding + LLM overhead.
+- **768-dim:** ~2–3× more computation per dot product than 256-dim, but HNSW pruning means you don't compute all 50M. Realistic p95: ~50–80ms for ANN. Tight but likely within the 150ms p95 budget if embedding latency is low.
+- **1536-dim:** ~6× more computation than 256-dim. p95: ~80–120ms for ANN on 50M vectors. This puts the 150ms p95 target at risk unless you accept lower HNSW recall (fewer candidates checked) or add hardware.
+
+### Quality reality
+
+The `DimensionTradeoffChart` shows the quality plateau. The empirical data point: OpenAI reports that Matryoshka-truncated `text-embedding-3-large` at 256 dimensions retains ~94% of full-dim quality. Going from 256 to 768 dims typically closes that gap significantly. Going from 768 to 1536 dims gains ~1–3% on standard benchmarks — rarely worth the latency and complexity cost for RAG workloads.
+
+### Recommendation
+
+**Start with 768-dim BGE (`bge-large-en-v1.5`)**: open-source (zero API cost), 768-dim sweet spot, consistently top-tier on MTEB retrieval tasks. Storage is ~$7.7/month. ANN latency fits the 150ms budget. If you need to go bigger, use a Matryoshka model and benchmark at 512 before paying for more dimensions.
+
+**Change the recommendation if:**
+- Your corpus is multilingual → switch to Cohere `embed-multilingual-v3` (1024-dim, API cost but best multilingual quality).
+- After running retrieval evals on your real queries, 768-dim BGE falls short → try OpenAI `text-embedding-3-small` at 1536-dim and check if the latency budget still clears.
+- You need to reduce latency below 100ms p95 → consider 256-dim Matryoshka truncation and measure the quality hit on your actual corpus.
+
+### Why this is the canonical answer
+
+The `DimensionTradeoffChart` in this chapter's In Practice section makes the quality plateau visible — 256→768 is a real gain; 768→1536 is marginal. The quantified storage numbers ($2.6–$15.4/month) and the latency framing (all three options fit the budget but 1536-dim puts p95 at risk) are what distinguish a senior answer from "more dimensions = better." The recommendation starts with the open-source sweet spot and gives explicit switching conditions — which is how real architectural decisions work.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="semantic-vs-lexical"
-  question="**Failure-mode trace.** A RAG-powered support bot scores 91% retrieval@5 in your offline eval. After launch, users who ask about 'the SSO thing' or 'SAML login' or 'work credentials' never get relevant results — even though the documentation chapter titled 'SSO Configuration' directly answers their questions. Diagnose this failure at the embedding level: what is the root cause, what metric in your offline eval failed to surface it, and what are two specific mitigations you'd deploy first?"
-/>
+  scenario="**Failure-mode trace.** A RAG-powered support bot scores 91% retrieval@5 in your offline eval. After launch, users who ask about 'the SSO thing' or 'SAML login' or 'work credentials' never get relevant results — even though the documentation chapter titled 'SSO Configuration' directly answers their questions."
+  question="Diagnose this failure at the embedding level: what is the root cause, what metric in your offline eval failed to surface it, and what are two specific mitigations you'd deploy first?"
+>
 
-<RecallPrompt
+### Root cause: out-of-distribution query terminology
+
+The eval set was written by the same people who wrote the documentation — they used "SSO" and "SAML" just like the docs do. Real users call the same thing by different names: "the SSO thing," "work credentials," "company login," "that auth thing IT set up." These phrases are **out-of-distribution** relative to the encoder's training data in the context of your specific product.
+
+The `OutOfDistributionFailure` sim in this chapter shows this precisely: a standard query ("how do I revoke user access?") lands in the permissions cluster and retrieves correctly. A jargon-laden query ("revoke AUTHZ-9 grants for tier-3 SKUs") lands far from any cluster — the encoder has never seen these internal identifiers in context, so the resulting embedding is essentially a random direction in the space. Cosine similarity to the correct documents is low even though the semantic intent is identical.
+
+For "the work login thing" vs "SSO Configuration": a general-purpose encoder may have seen "SSO" in technical contexts, but "work login thing" is informal phrasing the encoder pattern-matches to a generic "authentication" neighborhood — not necessarily close enough to the SSO documentation cluster to break the top-5.
+
+### What the offline eval missed
+
+The metric that hid this failure is **retrieval@5 evaluated on author-written queries**. This metric measures whether any relevant chunk appears in the top-5 — but it only catches failures your eval queries trigger. If every eval query uses "SSO" (because the engineers who wrote the eval also read the docs), the metric will read 91%. User queries using "work login thing" never appear in the eval set, so the failure is invisible.
+
+The metric to add: **retrieval@5 on a user-written query sample**. Collect 50–100 queries from actual users (support tickets, chat logs, common questions to the help desk). Run your offline eval against those queries. A 91% on author-written queries can coexist with 40% on user-written queries for the same corpus — as this chapter notes explicitly.
+
+### Two mitigations to deploy first
+
+**1. Query rewriting (highest return on effort).** Before embedding the user's query, use an LLM to normalize it to canonical terminology: "the work login thing" → "SSO configuration and SAML setup." This costs one LLM call per query but requires zero changes to your index. Retrieval from a standardized query lands in the right cluster. The `OutOfDistributionFailure` sim labels this the first mitigation chip — it's first because it's the fastest to ship.
+
+**2. Synonym expansion in metadata.** Store known aliases for key terms in chunk metadata (e.g., `aliases: ["SSO", "SAML", "single sign-on", "work login"]`) and run a hybrid search: vector search to find semantically nearby docs, BM25 or keyword filter to also surface docs whose metadata aliases match the query's literal tokens. This catches the cases where query rewriting doesn't normalize perfectly.
+
+### Why this is the canonical answer
+
+The "failure mode you will see in production" sub-section of this chapter's In Practice section describes this exact scenario: "SSO", "SAML login", "the work login thing" — the same product feature, four different names. The `OutOfDistributionFailure` sim lets you watch the embedding land far from any cluster for jargon queries. The eval lesson — include user-written queries, not just author-written ones — is the canonical prevention. In interviews, naming out-of-distribution query terminology as the root cause (not "bad embedding model") and leading with query rewriting as the first mitigation is the answer that shows practical production experience.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="cosine-similarity"
-  question="**Senior eng pushback.** A teammate opens a PR that normalizes all embedding vectors to unit length before storing them, arguing 'this makes dot product equivalent to cosine similarity, which is faster to compute at query time.' Is the underlying math correct? Is this the right call for your production system? Write the PR review comment — include what you'd approve, what you'd flag, and one scenario where this optimization would actually hurt retrieval."
-/>
+  scenario="**Senior eng pushback.** A teammate opens a PR that normalizes all embedding vectors to unit length before storing them, arguing 'this makes dot product equivalent to cosine similarity, which is faster to compute at query time.'"
+  question="Is the underlying math correct? Is this the right call for your production system? Write the PR review comment — include what you'd approve, what you'd flag, and one scenario where this optimization would actually hurt retrieval."
+>
 
-<RecallPrompt
+### Is the math correct?
+
+Yes — exactly. When both vectors are unit-normalized, `A · B = |A| × |B| × cos(θ) = 1 × 1 × cos(θ) = cos(θ)`. Dot product and cosine similarity become identical. This is a well-established optimization; Pinecone, Weaviate, and most ANN libraries apply it internally. The reviewer understands the math correctly.
+
+The formula from this chapter's "Measuring similarity" section: `cosine(A, B) = (A · B) / (|A| × |B|)`. Pre-normalizing eliminates the division at query time. For 50M vectors at 1536 dimensions, this is a real speedup — not dramatic, but real.
+
+### PR review comment
+
+---
+
+**Approve with minor flag.**
+
+The math is correct — dot product on unit-normalized vectors is identical to cosine similarity, and the per-query speedup is real. Most managed vector databases (Pinecone, Weaviate, Qdrant) do this normalization internally anyway, so you may be duplicating work that already happens. Worth checking the client library docs before you add the normalization step.
+
+**What I'd approve immediately:**
+- Normalizing vectors before upsert if your vector DB doesn't do it internally.
+- The comment in the code explaining why — future engineers shouldn't have to re-derive this.
+
+**What I'd flag:**
+- If you ever want to use **dot-product similarity without normalization** (e.g., to weight results by embedding magnitude as a confidence proxy), you lose that option permanently. Low-magnitude embeddings — which some models produce for short, ambiguous queries — carry a signal that normalization discards.
+- **Verify that your vector DB isn't already normalizing.** Applying unit normalization twice is harmless but confusing.
+- Store the original L2 norm in metadata if you want to be able to recover it. Cheap to store, hard to recompute at query time.
+
+---
+
+### The scenario where this hurts retrieval
+
+**Maximum Inner Product Search (MIPS) for recommendation systems.** Some retrieval setups deliberately use non-normalized dot product to surface items where high embedding magnitude encodes popularity or confidence. A short, ambiguous query like "settings" has a low-magnitude embedding; a specific well-formed query like "how do I configure SAML SSO for Okta" has a higher magnitude. If your ANN index uses raw dot product, the magnitude difference can help rank specificity. After normalization, both queries have the same magnitude = 1, and that signal disappears. This doesn't affect standard RAG (where cosine is correct), but if your architecture ever evolves toward a hybrid retrieval mode that exploits magnitude, you've lost the option.
+
+### Why this is the canonical answer
+
+The cosine similarity formula in this chapter's "Measuring similarity" section makes the equivalence explicit: dividing by `|A| × |B|` normalizes out magnitude. The senior review doesn't just say "yes, approve" — it checks whether the DB already does this, flags the MIPS edge case, and proposes preserving the original norm as metadata. That's the difference between rubber-stamping a mathematically correct PR and actually reviewing it.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="embedding"
-  question="**Architecture call.** Your CTO asks: 'Why are we building RAG at all? GPT-4 has a 200K token context window — can't we just stuff the entire knowledge base in the prompt?' You have 50M tokens of documentation. Give a concrete, numbers-grounded answer that addresses cost, latency, and retrieval quality — and describe the one scenario where the CTO's approach actually is the right call."
-/>
+  scenario="**Architecture call.** Your CTO asks: 'Why are we building RAG at all? GPT-4 has a 200K token context window — can't we just stuff the entire knowledge base in the prompt?' You have 50M tokens of documentation."
+  question="Give a concrete, numbers-grounded answer that addresses cost, latency, and retrieval quality — and describe the one scenario where the CTO's approach actually is the right call."
+  architecture={`Your documentation:
+  50M tokens total
+
+200K context window approach:
+  250 full-context calls per document set (50M / 200K)
+  — or —
+  50M tokens injected per query (if feasible)
+
+RAG approach:
+  Top-K retrieval: ~2K–8K tokens per query
+  One embedding call: ~20–50ms
+  ANN search: ~50–100ms`}
+>
+
+### Why 200K context doesn't scale: the numbers
+
+**Cost.** GPT-4 Turbo at $0.01/1K input tokens. Stuffing 50M tokens per query: **$500 per query**. At 1,000 queries/day, that's $500,000/day. RAG retrieves 2K–8K tokens per query: **$0.02–$0.08 per query** — a 6,000–25,000× cost reduction. The math is not close.
+
+Even if you pre-process the 50M tokens into 250 chunks of 200K and cache them with prompt caching (~90% discount), you're at ~$12,500/day. Still 625× more expensive than RAG at the same query volume.
+
+**Latency.** GPT-4 takes 10–30 seconds to process and generate over a 200K context. RAG adds ~70–150ms for embedding + ANN search, then runs the LLM over 2K–8K tokens (~1–3 seconds). The user-facing latency difference is 5–10× in RAG's favor.
+
+**Retrieval quality.** Larger context windows have "lost in the middle" problems — models pay disproportionately more attention to content at the beginning and end of a long context, and may miss or misweight a relevant fact buried at position 80K in a 200K prompt. RAG retrieves the most relevant chunks and presents them at the top of a short context, where the model attends to them reliably.
+
+### The one scenario where the CTO is right
+
+**When your total corpus fits in a single reasonably-sized context window and you query it frequently with context-dependent questions.** Example: a 40-page technical spec where every question depends on definitions from section 1 to interpret clauses in section 8. RAG would retrieve the wrong chunks because the query doesn't contain the right keywords to pull in the cross-referenced definitions. Stuffing the whole spec — if it fits in 128K tokens at ~$1.28 per query — may actually produce better answers than retrieval. For a low-volume internal tool with a small, stable document set, this is a legitimate choice.
+
+The threshold: if your corpus is under ~100K tokens and your queries routinely require whole-document context (legal analysis, contract review, multi-section technical specs with heavy cross-references), full-context beats RAG on quality and may be acceptable on cost. Above that threshold, RAG is almost always the right default.
+
+### Framing the answer for the CTO
+
+The 200K window is a great tool for small, coherent documents. For 50M tokens of documentation, it's economically and latency-prohibitive by 3–5 orders of magnitude. RAG is the solution specifically for when the corpus is larger than what you can fit in a prompt — which is the common case. The architecture should match the corpus size, not ignore it.
+
+### Why this is the canonical answer
+
+This chapter's "Where embeddings fit in the bigger system" section and the `EmbeddingPipelineFlow` diagram establish that the encoder fits in a larger system that exists precisely because we can't fit the whole corpus in a prompt. The numbers — $500/query vs $0.02–$0.08/query, 30s vs 2s — are the grounding the CTO needs. The exception (small, coherent, cross-referenced corpus) shows you understand when RAG is the wrong tool, which is what distinguishes senior architectural judgment from cargo-cult RAG advocacy.
+
+</InterviewPrompt>
