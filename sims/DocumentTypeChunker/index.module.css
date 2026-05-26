@@ -1,0 +1,165 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.typeBtn {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  color: #374151;
+}
+
+.typeBtn:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.typeBtn.active {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #5b21b6;
+  font-weight: 600;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.panelHeader {
+  background: #f3f4f6;
+  font-size: 0.75em;
+  font-weight: 600;
+  color: #4b5563;
+  padding: 0.35rem 0.65rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.codeBox {
+  font-family: monospace;
+  font-size: 0.8em;
+  color: #1f2937;
+  padding: 0.65rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  background: #f9fafb;
+}
+
+.chunksDisplay {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0.5rem;
+  background: #f9fafb;
+}
+
+.chunk {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 0.35rem 0.5rem;
+  position: relative;
+  margin-bottom: 0.35rem;
+}
+
+.chunkLabel {
+  font-size: 0.68em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+}
+
+.chunkText {
+  font-family: monospace;
+  font-size: 0.78em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #1f2937;
+  line-height: 1.5;
+}
+
+.splitMarker {
+  display: block;
+  text-align: center;
+  font-size: 0.85em;
+  color: #6b7280;
+  margin: 0.1rem 0 0.2rem;
+  cursor: default;
+}
+
+.corruptionCallout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-left: 4px solid #f97316;
+  border-radius: 4px;
+  padding: 0.65rem 0.75rem;
+}
+
+.corruptionIcon {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  background: #f97316;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75em;
+  font-weight: 800;
+  line-height: 1;
+  padding-top: 1px;
+}
+
+.corruptionTitle {
+  display: block;
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #c2410c;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.corruptionText {
+  font-size: 0.82em;
+  color: #1f2937;
+  margin: 0;
+  line-height: 1.5;
+}

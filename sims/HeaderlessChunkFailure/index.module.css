@@ -1,0 +1,193 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.panelBroken {
+  border-color: #fca5a5;
+}
+
+.panelFixed {
+  border-color: #86efac;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #f3f4f6;
+  padding: 0.3rem 0.65rem;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.panelBroken .panelHeader {
+  background: #fef2f2;
+  border-bottom-color: #fca5a5;
+}
+
+.panelFixed .panelHeader {
+  background: #f0fdf4;
+  border-bottom-color: #86efac;
+}
+
+.panelNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  background: #6b7280;
+  color: white;
+  border-radius: 50%;
+  font-size: 0.7em;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.badge {
+  margin-left: auto;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  font-size: 0.72em;
+  font-weight: 700;
+}
+
+.badge[data-status="broken"] {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.badge[data-status="fixed"] {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.docBox,
+.chunkBox {
+  font-family: monospace;
+  font-size: 0.8em;
+  color: #1f2937;
+  padding: 0.6rem 0.75rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  background: #f9fafb;
+}
+
+.headerLine {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  background: #f9fafb;
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.bubbleLabel {
+  font-size: 0.68em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+}
+
+.bubbleText {
+  display: inline-block;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8em;
+  color: #1f2937;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-width: 100%;
+}
+
+.bubble[data-role="user"] .bubbleText {
+  background: #ede9fe;
+  border-color: #c4b5fd;
+  font-family: inherit;
+  font-style: italic;
+}
+
+.bubbleFail .bubbleText {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+  font-family: inherit;
+  font-style: italic;
+}
+
+.bubbleSuccess .bubbleText {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+  font-family: inherit;
+  font-style: italic;
+}
+
+.fixRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-top: 0.25rem;
+}
+
+.fixBtn {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82em;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.fixBtn:hover {
+  background: #f3f4f6;
+}
+
+.fixBtnActive {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #5b21b6;
+}
+
+.fixHint {
+  font-size: 0.78em;
+  color: #6b7280;
+  font-style: italic;
+}

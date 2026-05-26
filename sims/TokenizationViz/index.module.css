@@ -1,0 +1,137 @@
+.sim {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.langBtn {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 0.82em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  color: #374151;
+}
+
+.langBtn:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.langBtn.active {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #5b21b6;
+  font-weight: 600;
+}
+
+.sentenceBox {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.sentenceLabel {
+  display: block;
+  font-size: 0.7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+  margin-bottom: 0.25rem;
+}
+
+.sentence {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #111827;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tokensLabel {
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+  margin-bottom: 0.4rem;
+}
+
+.tokenBlocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 0.75rem;
+  min-height: 2rem;
+}
+
+.token {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.8em;
+  font-weight: 500;
+  white-space: pre;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.statItem {
+  flex: 1;
+  min-width: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: #f9fafb;
+}
+
+.statValue {
+  font-size: 1.1em;
+  font-weight: 700;
+  color: #111827;
+}
+
+.statLabel {
+  font-size: 0.7em;
+  color: #6b7280;
+  margin-top: 1px;
+}
+
+.statDivider {
+  width: 1px;
+  background: #e5e7eb;
+  align-self: stretch;
+}
+
+.caption {
+  font-size: 0.82em;
+  color: #6b7280;
+  margin: 0;
+  font-style: italic;
+}
