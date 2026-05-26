@@ -1,0 +1,131 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+  font-size: 0.82em;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 1fr 80px 160px 160px;
+  gap: 0.5rem;
+  padding: 0 0.25rem 0.4rem;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 600px) {
+  .header {
+    grid-template-columns: 1fr 60px 110px 110px;
+  }
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 80px 160px 160px;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.25rem;
+  border-radius: 4px;
+}
+
+@media (max-width: 600px) {
+  .row {
+    grid-template-columns: 1fr 60px 110px 110px;
+  }
+}
+
+.row:hover {
+  background: #f9fafb;
+}
+
+.col1 {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.modelName {
+  font-family: monospace;
+  font-size: 0.9em;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vendorBadge {
+  display: inline-block;
+  font-size: 0.75em;
+  font-weight: 600;
+  padding: 0.05em 0.4em;
+  border-radius: 3px;
+  width: fit-content;
+}
+
+.colDim {
+  display: flex;
+  align-items: center;
+}
+
+.dimBadge {
+  background: #f3f4f6;
+  color: #374151;
+  font-family: monospace;
+  font-size: 0.85em;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+}
+
+.colBar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.barTrack {
+  flex: 1;
+  height: 8px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
+.barLabel {
+  font-family: monospace;
+  font-size: 0.82em;
+  color: #374151;
+  min-width: 2.5em;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.caption {
+  font-size: 0.85em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.75rem;
+  font-style: italic;
+  line-height: 1.4;
+}

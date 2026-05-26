@@ -1,0 +1,95 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  cursor: crosshair;
+}
+
+.readout {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.4rem 0.6rem;
+  background: #f5f3ff;
+  border: 1px solid #ede9fe;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.readoutMain {
+  color: #374151;
+}
+
+.readoutSub {
+  color: #6b7280;
+}
+
+.saving {
+  color: #059669;
+}
+
+.slider {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.sliderLabel {
+  font-size: 0.78em;
+  color: #9ca3af;
+}
+
+.sliderInput {
+  width: 100%;
+  accent-color: #7c3aed;
+}
+
+.sliderTicks {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.2rem;
+}
+
+.tick {
+  background: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.72em;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.tick:hover {
+  background: #f5f3ff;
+  border-color: #a78bfa;
+  color: #4c1d95;
+}
+
+.tickActive {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: white;
+}
+
+.caption {
+  font-size: 0.85em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.6rem;
+  font-style: italic;
+  line-height: 1.4;
+}

@@ -1,0 +1,109 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+}
+
+.flowItem {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.box {
+  background: #f9fafb;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  min-width: 90px;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.box:hover {
+  background: #f5f3ff;
+  border-color: #a78bfa;
+}
+
+.boxActive {
+  background: #f5f3ff;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 2px #ede9fe;
+}
+
+.boxLabel {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.boxShort {
+  font-family: monospace;
+  font-size: 0.72em;
+  color: #6b7280;
+}
+
+.arrow {
+  font-size: 1.1em;
+  color: #9ca3af;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.detail {
+  margin-top: 0.75rem;
+  background: #fafafe;
+  border: 1px solid #ede9fe;
+  border-radius: 5px;
+  padding: 0.65rem 0.85rem;
+}
+
+.detailHead {
+  display: block;
+  font-size: 0.85em;
+  color: #4c1d95;
+  margin-bottom: 0.4rem;
+}
+
+.detailBody {
+  font-family: monospace;
+  font-size: 0.78em;
+  color: #374151;
+  white-space: pre-wrap;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.hint {
+  margin-top: 0.5rem;
+  font-size: 0.82em;
+  color: #9ca3af;
+  text-align: center;
+  font-style: italic;
+}
+
+.caption {
+  font-size: 0.85em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.6rem;
+  font-style: italic;
+  line-height: 1.4;
+}
