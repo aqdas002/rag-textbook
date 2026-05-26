@@ -9,7 +9,7 @@ prerequisites: []
 import { ChunkBoundaryExplorer } from '@sims/ChunkBoundaryExplorer'
 import { OverlapVisualizer } from '@sims/OverlapVisualizer'
 import { ChunkRetrievalImpact } from '@sims/ChunkRetrievalImpact'
-import { PredictGate, RecallPrompt } from '@/components'
+import { PredictGate, RecallPrompt, InterviewPrompt } from '@/components'
 import { VendorDefaultsChart } from '@sims/VendorDefaultsChart'
 import { SplitterLevels } from '@sims/SplitterLevels'
 import { HeaderPrependingDemo } from '@sims/HeaderPrependingDemo'
@@ -208,27 +208,234 @@ is no single right answer to most — what's graded is whether you identify
 the right tradeoffs, propose specific (not generic) actions, and flag
 failure modes.
 
-<RecallPrompt
+<InterviewPrompt
   concept="chunk-size-tradeoff"
-  question="**Production debug.** A customer complains your RAG-powered support bot returns 'I don't have information about that' for a question whose answer is clearly in their documentation. You check the retrieval logs and confirm the relevant chunk IS in the retrieved top-5. What's likely wrong, and what are the first three specific things you'd check in the chunking pipeline?"
-/>
+  scenario="**Production debug.** A customer complains your RAG-powered support bot returns 'I don't have information about that' for a question whose answer is clearly in their documentation. You check the retrieval logs and confirm the relevant chunk IS in the retrieved top-5."
+  question="What's likely wrong, and what are the first three specific things you'd check in the chunking pipeline?"
+  architecture={`User query
+  ↓
+Vector retriever returns top-5 chunks (includes the relevant one ✓)
+  ↓
+top-5 → LLM context window
+  ↓
+LLM responds: "I don't have information about that"`}
+>
 
-<RecallPrompt
+### Root cause
+
+The retriever did its job — the chunk with the right keywords is in the top-5. The failure is downstream: the LLM reads the chunk and still can't tell it answers the question. Almost always, the chunk was lifted from a list, table, or numbered step where the **header** (e.g., "Returns Policy") lived above the chunk boundary and got stripped at chunking time.
+
+Example: the chunk reads:
+
+```
+- 30 days from the date of purchase
+- must include original packaging
+- refunds processed within 5 business days
+```
+
+No subject. No context. The LLM has no way to know what these bullet points refer to, so it correctly reports that it can't answer.
+
+### The 3 things to check first
+
+1. **Print the top-5 chunks raw.** Read them cold, without knowing the original document. If you can't tell what they refer to, the LLM can't either. This catches 80% of "retriever found it but LLM doesn't know" cases in under five minutes.
+
+2. **Look for stripped headers.** Trace one of those chunks back to its source document. Is there a section heading above it (`## Returns Policy`, `### Eligibility`) that didn't make it into the chunk text? That's the bug. Fixed-size and recursive character splitters don't know headers exist.
+
+3. **Test header prepending locally.** Modify your chunking pipeline to prepend `[doc_title] / [section_heading] /` to each chunk. Re-embed those 5 chunks. Re-run the same query. The chunk now starts with "Returns Policy / Eligibility /..." and the LLM can answer. If that fixes it, roll the change to your full index.
+
+### Why this is the canonical answer
+
+The "single highest-leverage chunking trick" sub-section of this chapter's In Practice covers exactly this. Anthropic's contextual retrieval paper (2024) reports 35–67% retrieval-failure reductions from adding contextual prefixes — and static header prepending captures most of that gain with no LLM calls and two lines of code. The `HeaderlessChunkFailure` sim in this chapter lets you watch the exact failure mode and fix play out on a toy corpus. In interviews, naming the root cause (header stripping at chunk boundaries) and the specific fix (prepend header chain) is the answer that distinguishes senior from junior thinking.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="semantic-boundaries"
-  question="**Design choice.** You're building RAG over a corpus of legal contracts — 20–100 page PDFs with deeply nested clauses (Section 4.3.1.a), cross-references ('as defined in Section 2.1'), and tables of fees. Walk through your chunking strategy: what splitter, what size, what metadata you attach, and name two specific things that fail if you use a naive 512-token fixed-size splitter on this corpus."
-/>
+  scenario="**Design choice.** You're building RAG over a corpus of legal contracts — 20–100 page PDFs with deeply nested clauses (Section 4.3.1.a), cross-references ('as defined in Section 2.1'), and tables of fees."
+  question="Walk through your chunking strategy: what splitter, what size, what metadata you attach, and name two specific things that fail if you use a naive 512-token fixed-size splitter on this corpus."
+>
 
-<RecallPrompt
+### Root cause
+
+Legal contracts are not prose. They are deeply structured documents where **meaning depends on hierarchy**: a clause only makes sense relative to its parent section and the definitions section earlier in the document. Fixed-size splitters are oblivious to this structure. They cut at token boundaries — splitting mid-sentence, mid-clause, mid-table-row — and discard the hierarchy entirely. Any chunk retrieved in isolation is likely uninterpretable.
+
+Two specific failures from naive 512-token fixed-size splitting:
+
+1. **Cross-reference loss.** A clause reading "as defined in Section 2.1" lands in its chunk without the definition it points to. The retriever finds the clause; the LLM reads it and has no idea what the term means. Retrieval quality looks fine; answer quality is wrong.
+2. **Table row splitting.** Fee schedules and obligation tables get cut mid-row. The retrieved chunk contains half a row with no column headers — the LLM can't parse which fee applies to which service tier. The `DocumentTypeChunker` sim in this chapter shows exactly this failure mode for tabular content.
+
+### The strategy
+
+**Splitter:** Document-specific (level 3 in the five-level taxonomy). Parse the PDF with LlamaParse or Unstructured.io (not `pypdf` — it destroys table layout). Then split by clause hierarchy using the section number pattern (`\d+\.\d+(\.\d+)*`) as a boundary signal.
+
+**Size:** Target 150–300 tokens per chunk after prepending context. Legal language is dense — 150 tokens can be a complete clause. Larger chunks start pulling in adjacent clauses and dilute the embedding signal.
+
+**Metadata to attach per chunk:**
+- `doc_id` and `doc_name` (contract identifier)
+- `section_path`: the full clause path, e.g., `4.3.1.a` — enables filtering by section in hybrid retrieval
+- `parties`: extracted entity names (enables filtering by counterparty)
+- `effective_date`: parsed from the preamble
+
+**Header prepending:** Every chunk starts with `[Contract: Acme SLA v3] / [Section 4.3.1.a: Termination for Convenience] /`. This is the highest-leverage trick covered in this chapter's In Practice — it lets the LLM anchor the clause in context even when retrieved in isolation.
+
+### Why this is the canonical answer
+
+The "document-type-specific gotchas" sub-section of this chapter's In Practice calls out PDFs specifically: "the extraction layer is usually the bigger problem." LlamaParse/Unstructured.io vs `pypdf` is the first fork in the decision tree, before you even think about chunk size. For legal corpora, level-3 document-specific splitting (splitting at structural boundaries) is the right default; level-2 recursive character splitting will quietly destroy clause integrity. Metadata-based filtering is covered in the retrieval chapter — but the metadata must be attached at chunk time, which is why the chunking strategy is where you design for it.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="chunk-overlap"
-  question="**Cost vs quality.** Your vector store has 50M chunks averaging 200 tokens. A teammate proposes halving the chunk size to 'get better precision.' At $0.13 per 1M tokens for embedding (one-time) and roughly $0.05 per GB-month for vector storage, quantify the impact on (a) re-embedding cost, (b) index storage, (c) query-time top-K latency. Under what corpus / query conditions does this swap actually improve end-to-end retrieval quality?"
-/>
+  scenario="**Cost vs quality.** Your vector store has 50M chunks averaging 200 tokens. A teammate proposes halving the chunk size to 100 tokens to 'get better precision.'"
+  question="Quantify the impact on (a) re-embedding cost, (b) index storage, (c) query-time top-K latency. Under what corpus and query conditions does this swap actually improve end-to-end retrieval quality?"
+  architecture={`Current state:
+  50M chunks × 200 tokens avg = 10B tokens in index
 
-<RecallPrompt
+Proposed state:
+  ~100M chunks × 100 tokens avg = 10B tokens in index
+  (same total text, roughly double the chunk count)`}
+>
+
+### Root cause: what halving chunk size actually does
+
+Halving chunk size doesn't halve the text — it doubles the chunk count. If your corpus is 10 billion tokens, you go from 50M chunks to roughly 100M chunks. Every downstream cost scales with chunk count, not total tokens.
+
+### Quantifying the three impacts
+
+**(a) Re-embedding cost**
+
+Re-embedding is billed per token of input text, not per chunk. The total token count of your corpus doesn't change — you're chunking the same documents, just more finely. So re-embedding cost is approximately the same: ~10B tokens × $0.13/1M tokens = **$1,300 one-time**. The doubled chunk count adds negligible overhead (each embed call is cheaper but there are twice as many). If you're using a cheap embedding model, this is a one-time sunk cost.
+
+**(b) Index storage**
+
+Each chunk becomes a vector. Typical dense embeddings are 1,536 dimensions × 4 bytes (float32) = ~6 KB per vector. Stored metadata and original text typically add another 2–5 KB.
+
+- Current: 50M chunks × ~8 KB = **~400 GB**
+- Proposed: 100M chunks × ~8 KB = **~800 GB**
+
+At $0.05/GB-month that's a delta of **~$20/month** ongoing — not a breaking cost, but real. ANN index structures (HNSW graphs) also grow super-linearly with vector count, so query latency climbs as well.
+
+**(c) Query-time top-K latency**
+
+ANN search over 100M vectors is slower than over 50M. HNSW complexity is approximately O(log N) for recall, but the constant factor matters in practice. Expect 1.5–2x latency increase when doubling index size, assuming the same hardware and HNSW `ef` setting. If you're running on a managed service (Pinecone, Weaviate), you'll likely need to upgrade to a larger pod tier, which has a real dollar cost.
+
+### When the swap actually improves retrieval quality
+
+Smaller chunks help when:
+- **Queries are narrow and factual**: "What is the penalty for late payment?" benefits from a 100-token chunk containing exactly that clause vs. a 200-token chunk that also contains the next three clauses, diluting the embedding toward "contract terms" in general.
+- **Your corpus has high information density per sentence**: legal text, API documentation, medical protocols — each sentence is a self-contained fact.
+- **Your current false-positive rate is high**: if retrieved chunks routinely contain the query keyword plus five irrelevant co-occurring topics, smaller chunks help.
+
+Smaller chunks hurt when:
+- **Facts span multiple sentences**: narrative descriptions, step-by-step procedures, multi-part arguments. A 100-token chunk cuts those mid-thought; the LLM gets half the fact.
+- **Overlap is zero**: without overlap, boundary-crossing facts vanish entirely. Halving chunk size without tuning overlap is a regression.
+- **You haven't measured**: "better precision" is a hypothesis. Run retrieval evals (precision@5, recall@5) on a held-out query set before re-indexing 50M chunks.
+
+### Why this is the canonical answer
+
+The tradeoff table in this chapter and the "Numbers from real systems" sub-section in In Practice make clear that chunk size is a corpus-specific hyperparameter, not a universal constant. The chapter explicitly calls out that "measuring end-to-end retrieval quality on real queries is the only honest evaluation." Halving chunk size without overlap adjustment and without running evals is the canonical junior mistake. The senior answer quantifies the costs, names the conditions where it helps, and gates the decision on measured retrieval quality — not intuition.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="chunk-retrieval-impact"
-  question="**Failure-mode trace.** A RAG support bot looks great in offline eval (retrieval@5 = 92%). After launch, you notice questions about 'returns policy' always retrieve chunks from the 'returns process' page — never the actual policy page. Trace this back to a specific chunking failure. What eval metric would have caught this before launch, and why did retrieval@5 miss it?"
-/>
+  scenario="**Failure-mode trace.** A RAG support bot looks great in offline eval (retrieval@5 = 92%). After launch, you notice questions about 'returns policy' always retrieve chunks from the 'returns process' page — never the actual policy page."
+  question="Trace this back to a specific chunking failure. What eval metric would have caught this before launch, and why did retrieval@5 miss it?"
+  architecture={`Offline eval:
+  Query set → retriever → retrieval@5 = 92% ✓
 
-<RecallPrompt
+Production observation:
+  "What is the returns policy?" → retrieves 'returns process' page chunks
+                               → never retrieves 'returns policy' page chunks`}
+>
+
+### Root cause: semantic collision from over-large chunks
+
+Two documents — "Returns Policy" and "Returns Process" — share a dense cluster of vocabulary: "returns," "refund," "eligibility," "processing time," "customer." When chunks are large (512+ tokens), each chunk from either document accumulates enough of this shared vocabulary to embed near the same centroid in vector space. The embedding model can no longer distinguish between them based on semantic similarity alone — both look like "returns-related content."
+
+This is the "score dilution" failure mode described in the tradeoff table. The "Returns Process" page may rank higher than "Returns Policy" simply because it happens to use slightly more of the query's exact vocabulary (e.g., "policy" appears in "Our process follows company policy"), or because it was indexed more recently and benefits from recency bias in the ANN structure.
+
+### Specific chunking failure
+
+The over-large chunks embed two semantically adjacent documents into overlapping regions of the vector space. The retriever can't tell them apart. In a different chunking configuration — say 100–150 token chunks at the sub-section level — the chunks from "Returns Policy" would embed as tight clusters around specific policy rules, and the chunks from "Returns Process" would embed around process steps. They'd have low cosine similarity to each other despite sharing surface vocabulary.
+
+### What would have caught this
+
+**Precision@5 (graded relevance)** — specifically, checking not just *whether* a relevant document appears in the top-5, but *which* document. Your offline eval measured retrieval@5 = 92%, meaning 92% of the time at least one relevant chunk appeared in the top-5. But it didn't verify that the **right** document ranked above the competing one.
+
+The metric that catches this is **Mean Reciprocal Rank (MRR)** or **NDCG with graded relevance labels** across document types. If you had labeled your eval set with "Returns Policy page = highly relevant, Returns Process page = marginally relevant," NDCG would have penalized the system for ranking Process above Policy. A retrieval@5 of 92% hides rank ordering inside the top-5 — any hit counts, regardless of position or document identity.
+
+### The 3-step diagnosis
+
+1. **Pull the actual ranked list for affected queries.** Print the document name and section for each of the top-5 chunks. You'll immediately see "Returns Process" at rank 1–3, "Returns Policy" absent or at rank 4–5.
+2. **Compare chunk size vs. embedding separation.** Embed representative chunks from both pages and measure cosine similarity. If it's above 0.92, your chunks are too large — they're collapsing into the same region.
+3. **Shrink chunks and re-measure.** Halve the chunk size for these document types. Re-run your eval with MRR or NDCG. The separation should increase.
+
+### Why this is the canonical answer
+
+The `ChunkRetrievalImpact` sim in this chapter shows exactly this dynamic: at large chunk sizes, precision@2 drops because semantically adjacent documents start retrieving for each other's queries. The "In Practice" section's note — "The wrong chunk size silently destroys retrieval" — is the key insight. Retrieval@5 is a coarse metric; it passes as long as something relevant appears in the top-5. Production failures come from rank ordering within that top-5, which requires graded-relevance metrics to surface in offline eval.
+
+</InterviewPrompt>
+
+<InterviewPrompt
   concept="chunk-size"
-  question="**Senior eng pushback.** A junior eng adds '512-token chunks with 50-token overlap, RecursiveCharacterTextSplitter, applied uniformly across all corpora' to your team's RAG wiki as the recommended default. As the senior on the team, what's your pushback? Rewrite the wiki entry."
-/>
+  scenario="**Senior eng pushback.** A junior eng adds '512-token chunks with 50-token overlap, RecursiveCharacterTextSplitter, applied uniformly across all corpora' to your team's RAG wiki as the recommended default."
+  question="As the senior on the team, what's your pushback? Rewrite the wiki entry."
+>
+
+### Root cause: uniform defaults hide corpus-specific failure modes
+
+`RecursiveCharacterTextSplitter` at 512 tokens is a reasonable starting point for uniform prose. It is not a corpus-agnostic default. The junior eng's instinct to document something is good — the error is treating a single configuration as universally correct. The "Numbers from real systems" sub-section of this chapter's In Practice shows that vendors themselves disagree by a factor of 2–4x on chunk size, and all of them tune to their evaluation corpus.
+
+The specific failure modes of this "default":
+
+- **Code corpora:** 512-token character splitting destroys indentation and produces syntactically invalid chunks. A function split mid-body embeds as garbage.
+- **Legal / structured PDFs:** Cross-references and clause hierarchies get severed. The retrieved chunk is uninterpretable without its parent section.
+- **Dense technical documentation:** 512 tokens often spans multiple distinct concepts (function A's description bleeds into function B's). Embeddings get diluted and retrieval precision drops.
+- **Short-form content (FAQs, product specs):** 512 tokens is larger than the entire source document. You end up with single-document chunks, which is just document-level retrieval with extra steps.
+
+### The rewritten wiki entry
+
+---
+
+**RAG Chunking — Team Defaults**
+
+There is no universal best chunk size. The right configuration depends on your corpus and query distribution. Measure on real queries before finalizing.
+
+**Starting point (for uniform prose only)**
+
+```python
+RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)
+```
+
+Use this only to get a prototype running. Expect to tune.
+
+**Decision tree**
+
+| Corpus type | Recommended splitter | Size range | Notes |
+|---|---|---|---|
+| Uniform prose | RecursiveCharacterTextSplitter | 300–600 tokens | Measure precision@5 on a query sample |
+| Markdown / docs with headers | MarkdownHeaderTextSplitter | 150–400 tokens | Prepend header chain to every chunk |
+| Code | AST-based (tree-sitter) | Per function/class | Never split mid-function |
+| Legal / structured PDFs | Document-specific (Unstructured.io) | 150–300 tokens | Extract with LlamaParse, not pypdf |
+| Tables | Keep intact or row-per-chunk JSON | N/A | Never chunk mid-row |
+
+**Always do**
+
+1. Chunk by **tokens** (use `tiktoken`), not characters — chars/token ratio varies by language and content type.
+2. **Prepend header chain** to every chunk: `[doc_title] / [section] / [chunk_text]`. This is the single highest-leverage change you can make (35–67% retrieval-failure reduction per Anthropic's contextual retrieval paper, 2024).
+3. **Evaluate before re-indexing at scale.** Run retrieval@5 and MRR on 50–100 real queries before committing a new chunk size to production.
+
+**Never**
+
+- Apply one configuration uniformly across different corpus types.
+- Tune chunk size without a retrieval eval to measure against.
+- Use `pypdf` for PDFs that contain tables or multi-column layouts.
+
+---
+
+### Why this is the canonical answer
+
+The five-level splitter taxonomy in this chapter's In Practice section (fixed → recursive → document-specific → semantic → agentic) exists precisely to counter the "pick one and apply everywhere" instinct. Level 2 (RecursiveCharacterTextSplitter) is "the 90% default for prose" — not for all document types. The token-vs-characters distinction, header prepending, and the call for corpus-specific evals are all covered in this chapter's In Practice sub-sections. The wiki rewrite above is what "document the tradeoffs, not a single answer" looks like in a team context.
+
+</InterviewPrompt>
