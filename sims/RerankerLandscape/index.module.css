@@ -1,0 +1,150 @@
+.figure {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  font-family: system-ui, sans-serif;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82em;
+}
+
+.th {
+  text-align: left;
+  font-size: 0.74em;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 2px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.axisHint {
+  font-weight: 400;
+  color: #9ca3af;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.rowApi {
+  background: #eef2ff;
+}
+
+.rowOss {
+  background: #f0fdf4;
+}
+
+.rowApi:not(:last-child),
+.rowOss:not(:last-child) {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tdName {
+  padding: 0.45rem 0.5rem;
+  white-space: nowrap;
+}
+
+.modelName {
+  font-size: 0.85em;
+  color: #374151;
+}
+
+.tdVendor {
+  padding: 0.45rem 0.5rem;
+  white-space: nowrap;
+}
+
+.badgeApi {
+  display: inline-block;
+  font-size: 0.75em;
+  font-weight: 600;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+
+.badgeOss {
+  display: inline-block;
+  font-size: 0.75em;
+  font-weight: 600;
+  background: #dcfce7;
+  color: #166534;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+
+.tdBar {
+  padding: 0.45rem 0.5rem;
+  min-width: 130px;
+}
+
+.barTrack {
+  height: 10px;
+  background: #f3f4f6;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 0.15rem;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 5px;
+  min-width: 2px;
+  transition: width 0.2s;
+}
+
+.barValue {
+  font-size: 0.74em;
+  color: #6b7280;
+  font-family: monospace;
+}
+
+.freeLabel {
+  font-size: 0.8em;
+  font-weight: 700;
+  color: #059669;
+  font-family: monospace;
+}
+
+.legend {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76em;
+  color: #6b7280;
+}
+
+.legendDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.caption {
+  font-size: 0.82em;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.6rem;
+  font-style: italic;
+  line-height: 1.4;
+}
